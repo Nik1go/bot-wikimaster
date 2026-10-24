@@ -116,6 +116,39 @@ arrête-toi pour les examiner plutôt que de les écraser.
 
 ## Vérifications humaines et incidents
 
+### Diagnostic d'un échec Cloudflare à la connexion
+
+Le mode `login` habituel reste un navigateur lancé par Playwright, même si tu y
+saisis toi-même tes identifiants. Pour comparer avec un navigateur sans pilotage
+automatique sur le même VPS, arrête ce mode avec Ctrl+C, puis :
+
+```bash
+docker compose stop
+git pull --ff-only origin main
+docker compose build
+docker compose run --rm --service-ports wiki-bot manual
+```
+
+Rouvre le même bureau noVNC via ton tunnel SSH et teste manuellement la connexion.
+Le mode `manual` lance directement le Chromium installé, sans connexion d'un
+pilote Playwright ni modification d'identité du navigateur. Il conserve le bac
+à sable et utilise un profil distinct. Aucun paquet ne s'ouvre automatiquement,
+et sa session ne sera pas transférée au profil du bot.
+
+Si la vérification passe ici mais échoue dans `login`, cela oriente le diagnostic
+vers l'environnement automatisé. Si elle échoue aussi ici, il faut encore
+examiner le réseau, la compatibilité du navigateur et le code d'erreur : cela ne
+prouve pas un blocage général de l'hébergeur.
+
+Le code `600010` appartient à la famille d'échecs associée par Cloudflare à des
+signaux d'automatisation. Cloudflare ne prend pas en charge les navigateurs
+automatisés pour résoudre ses challenges en production. Une cadence plus lente
+entre les ouvertures ne résout pas un échec à la connexion.
+
+Sources :
+https://developers.cloudflare.com/turnstile/troubleshooting/client-side-errors/error-codes/
+et https://developers.cloudflare.com/cloudflare-challenges/reference/supported-browsers/.
+
 Le code du site peut demander une « Vérification rapide ». Le bot attend jusqu'à
 120 secondes que le site se valide normalement. Il ne clique pas dans Turnstile,
 ne résout pas de puzzle, et ne fabrique aucun jeton de vérification.
