@@ -7,8 +7,8 @@ import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
-if (!['login', 'check', 'once', 'run', 'resume', 'status', 'smoke'].includes(mode)) {
-  console.error('Commande : login | check | once | run | resume | status | smoke');
+if (!['login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke'].includes(mode)) {
+  console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke');
   process.exit(2);
 }
 const config = readConfig();
@@ -24,6 +24,12 @@ if (mode === 'status') {
 }
 
 const { chromium } = await import('playwright');
+if (mode === 'manual' || mode === 'manual-smoke') {
+  // Only obtain the installed executable path. No Playwright browser or page
+  // is created or attached to this manually operated process.
+  const { runManualBrowser } = await import('./manual.mjs');
+  process.exit(await runManualBrowser(chromium.executablePath(), config, state.log, mode === 'manual-smoke'));
+}
 const profile = path.resolve(config.dataDir, 'chromium');
 await mkdir(profile, { recursive: true, mode: 0o700 });
 const context = await chromium.launchPersistentContext(profile, {
