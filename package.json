@@ -1,0 +1,13 @@
+{
+  "name": "wiki-masters-hourly",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.mjs run",
+    "test": "node --test",
+    "check": "node src/index.mjs check"
+  },
+  "dependencies": { "playwright": "1.64.0" }
+}
