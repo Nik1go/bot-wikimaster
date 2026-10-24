@@ -3,13 +3,19 @@ set -Eeuo pipefail
 umask 077
 
 # Control commands need neither the desktop nor another browser instance.
-if [[ "${1:-run}" == "resume" || "${1:-run}" == "status" ]]; then
+if [[ "${1:-run}" == "resume" || "${1:-run}" == "status" || "${1:-run}" == "use-manual-session" ]]; then
   exec node /app/src/index.mjs "$@"
 fi
 
 pids=()
+node_pid=''
 cleanup() {
   trap - TERM INT EXIT
+  # Close Chromium before tearing down its X server so the profile can flush.
+  if [[ -n "$node_pid" ]]; then
+    kill -TERM "$node_pid" 2>/dev/null || true
+    wait "$node_pid" 2>/dev/null || true
+  fi
   for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
@@ -32,10 +38,10 @@ pids+=("$!")
 websockify --web=/usr/share/novnc 6080 localhost:5900 &
 pids+=("$!")
 node /app/src/index.mjs "$@" &
-pids+=("$!")
+node_pid=$!
 
 set +e
-wait -n "${pids[@]}"
+wait -n "${pids[@]}" "$node_pid"
 result=$?
 set -e
 exit "$result"
