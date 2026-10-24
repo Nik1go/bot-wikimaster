@@ -97,6 +97,23 @@ Arrête le service avant d'utiliser `login`, `check` ou `once` :
 docker compose stop
 ```
 
+## Mise à jour depuis GitHub
+
+Dans le dossier du projet sur le VPS :
+
+```bash
+docker compose stop
+git fetch origin
+git pull --ff-only origin main
+docker compose up -d --build
+docker compose logs -f --tail=50 wiki-bot
+```
+
+Le volume de connexion et le fichier `.env` sont conservés. `git fetch` récupère
+les références distantes ; `git pull --ff-only` met à jour les fichiers locaux
+sans créer de commit de fusion. Si Git signale des modifications locales,
+arrête-toi pour les examiner plutôt que de les écraser.
+
 ## Vérifications humaines et incidents
 
 Le code du site peut demander une « Vérification rapide ». Le bot attend jusqu'à
