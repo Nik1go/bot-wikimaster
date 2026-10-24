@@ -3,11 +3,23 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readConfig, parseInventory, nextAllowedStart, runBatch, PauseError } from '../src/core.mjs';
+import { readConfig, parseInventory, nextAllowedStart, resolveBrowserProfile, runBatch, PauseError } from '../src/core.mjs';
 import { createState } from '../src/state.mjs';
 
 const config = readConfig({});
 const quiet = { sleep: async () => {}, log: async () => {} };
+
+test('profil par défaut et sélection explicite du profil manuel', () => {
+  assert.equal(resolveBrowserProfile(null), 'chromium');
+  assert.equal(resolveBrowserProfile({ name: 'manual-chromium' }), 'manual-chromium');
+});
+
+test('un profil inconnu ou un chemin extérieur est refusé', () => {
+  for (const name of ['../other-profile', '/etc', '', 'state']) {
+    assert.throws(() => resolveBrowserProfile({ name }), PauseError);
+  }
+  assert.throws(() => resolveBrowserProfile({}), PauseError);
+});
 
 test('stock normal et stock nul, avec espaces et sauts de ligne', () => {
   assert.deepEqual(parseInventory('4  / 10\npaquets disponibles'), { available: 4, capacity: 10 });
@@ -77,9 +89,11 @@ test('la pause et le planning persistent ; état corrompu refusé', async () => 
     const first = await createState(dir);
     await first.put('paused', { code: 'login_required' });
     await first.put('schedule', { lastStartedAt: '2026-10-24T16:00:00Z' });
+    await first.put('browser-profile', { name: 'manual-chromium' });
     const second = await createState(dir);
     assert.equal((await second.get('paused')).code, 'login_required');
     assert.equal((await second.get('schedule')).lastStartedAt, '2026-10-24T16:00:00Z');
+    assert.equal(resolveBrowserProfile(await second.get('browser-profile')), 'manual-chromium');
     await second.remove('paused');
     assert.equal(await first.get('paused'), null);
     await writeFile(path.join(dir, 'state', 'schedule.json'), '{');
