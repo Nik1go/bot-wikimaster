@@ -3,8 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 
-// A manual compatibility test on the same VPS/network. This separate profile
-// is never imported by the bot and no automation protocol is attached to it.
+// A manual compatibility test on the same VPS/network. No automation protocol
+// is attached here. Later bot reuse requires the explicit use-manual-session command.
 export async function runManualBrowser(executable, config, log, smoke = false) {
   const profile = path.resolve(config.dataDir, smoke ? 'manual-smoke' : 'manual-chromium');
   await mkdir(profile, { recursive: true, mode: 0o700 });
@@ -34,7 +34,7 @@ export async function runManualBrowser(executable, config, log, smoke = false) {
       return 0;
     }
     await log('manual_browser_started', {
-      message: 'Diagnostic manuel : utilise noVNC pour tester la connexion. Aucun clic automatique. Ce profil ne sera pas utilisé par le bot.',
+      message: 'Navigateur manuel : utilise noVNC pour te connecter. Aucun clic automatique. Le bot reste sur son profil habituel tant que use-manual-session n’a pas été exécuté.',
     });
     const result = await exited;
     return stopping ? 0 : result.code ?? 1;

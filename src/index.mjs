@@ -1,14 +1,14 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { readConfig, runBatch, nextAllowedStart, PauseError } from './core.mjs';
+import { readConfig, runBatch, nextAllowedStart, resolveBrowserProfile, PauseError } from './core.mjs';
 import { createState } from './state.mjs';
 import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
-if (!['login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke'].includes(mode)) {
-  console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke');
+if (!['login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke', 'use-manual-session'].includes(mode)) {
+  console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke | use-manual-session');
   process.exit(2);
 }
 const config = readConfig();
@@ -19,7 +19,22 @@ if (mode === 'resume') {
   process.exit(0);
 }
 if (mode === 'status') {
-  console.log(JSON.stringify({ paused: await state.get('paused'), schedule: await state.get('schedule'), lastRun: await state.get('last-run') }, null, 2));
+  console.log(JSON.stringify({ browserProfile: resolveBrowserProfile(await state.get('browser-profile')), paused: await state.get('paused'), schedule: await state.get('schedule'), lastRun: await state.get('last-run') }, null, 2));
+  process.exit(0);
+}
+if (mode === 'use-manual-session') {
+  const name = 'manual-chromium';
+  let exists = false;
+  try { exists = (await stat(path.resolve(config.dataDir, name, 'Default'))).isDirectory(); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!exists) {
+    await state.log('manual_profile_missing', { message: 'Ouvre le mode manual et connecte-toi avant de sélectionner sa session.' });
+    process.exit(1);
+  }
+  // Store only a profile name. Authentication remains inside the private volume;
+  // no cookie, token or password is exported, copied or logged.
+  await state.put('browser-profile', { name });
+  await state.log('browser_profile_selected', { name, message: 'Profil manuel sélectionné pour le bot. Arrête le navigateur manuel avant check/once/run.' });
   process.exit(0);
 }
 
@@ -30,7 +45,8 @@ if (mode === 'manual' || mode === 'manual-smoke') {
   const { runManualBrowser } = await import('./manual.mjs');
   process.exit(await runManualBrowser(chromium.executablePath(), config, state.log, mode === 'manual-smoke'));
 }
-const profile = path.resolve(config.dataDir, 'chromium');
+const selectedProfile = resolveBrowserProfile(await state.get('browser-profile'));
+const profile = path.resolve(config.dataDir, selectedProfile);
 await mkdir(profile, { recursive: true, mode: 0o700 });
 const context = await chromium.launchPersistentContext(profile, {
   headless: false,

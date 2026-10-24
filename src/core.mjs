@@ -29,6 +29,14 @@ export function readConfig(env = process.env) {
   });
 }
 
+export function resolveBrowserProfile(selection) {
+  if (selection == null) return 'chromium';
+  if (selection.name !== 'chromium' && selection.name !== 'manual-chromium') {
+    throw new PauseError('profile_invalid', 'Sélection de profil de navigateur invalide.');
+  }
+  return selection.name;
+}
+
 export function parseInventory(text) {
   const match = text.match(/(\d+)\s*\/\s*(\d+)\s*paquets disponibles/i);
   if (!match) throw new PauseError('interface_changed', 'Compteur de paquets introuvable.');
