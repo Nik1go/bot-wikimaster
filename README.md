@@ -133,7 +133,7 @@ Rouvre le même bureau noVNC via ton tunnel SSH et teste manuellement la connexi
 Le mode `manual` lance directement le Chromium installé, sans connexion d'un
 pilote Playwright ni modification d'identité du navigateur. Il conserve le bac
 à sable et utilise un profil distinct. Aucun paquet ne s'ouvre automatiquement,
-et sa session ne sera pas transférée au profil du bot.
+et son profil reste séparé tant que tu ne le sélectionnes pas explicitement pour le bot.
 
 Si la vérification passe ici mais échoue dans `login`, cela oriente le diagnostic
 vers l'environnement automatisé. Si elle échoue aussi ici, il faut encore
@@ -148,6 +148,52 @@ entre les ouvertures ne résout pas un échec à la connexion.
 Sources :
 https://developers.cloudflare.com/turnstile/troubleshooting/client-side-errors/error-codes/
 et https://developers.cloudflare.com/cloudflare-challenges/reference/supported-browsers/.
+
+### Tester le bot avec une connexion faite dans le mode manuel
+
+Si tu t'es connecté dans le mode `manual`, tu peux sélectionner ce profil
+persistant pour le bot. Cette sélection n'exporte aucune donnée de connexion et
+ne modifie pas `.env`. Le profil reste dans le volume Docker privé. La sélection
+ne garantit pas que Cloudflare acceptera ensuite le navigateur automatisé.
+
+Sur le VPS, dans le dossier du projet (les commandes ci-dessous utilisent sudo) :
+
+```bash
+sudo git pull --ff-only origin main
+sudo docker compose build
+sudo docker stop wiki-manual
+sudo docker compose stop
+sudo docker compose run --rm wiki-bot use-manual-session
+sudo docker compose run --rm wiki-bot check
+```
+
+`wiki-manual` est le nom du conteneur manuel lancé avec `--name wiki-manual`.
+Le bureau noVNC se déconnecte quand ce conteneur est arrêté : c'est attendu.
+N'exécute pas le mode manuel et le bot en même temps sur ce profil.
+
+Si `check_ok` apparaît et indique au moins un paquet, teste une seule ouverture :
+
+```bash
+sudo docker compose run --rm wiki-bot resume
+sudo docker compose run --rm -e MAX_PACKS_PER_SESSION=1 wiki-bot once
+```
+
+`resume` lève une pause précédente sans annuler le délai horaire. Un test réussi
+écrit `pack_opened` puis `session_finished` avec `opened: 1`. Si `hourly_limit`
+apparaît, attends la date `nextRun`. Avec un stock nul, `opened: 0` est normal.
+Si le contrôle Cloudflare échoue, le bot se met en pause et le test s'arrête.
+
+Après une ouverture réussie :
+
+```bash
+sudo docker compose up -d
+sudo docker compose logs -f --tail=50 wiki-bot
+```
+
+Le service réutilise désormais le profil sélectionné et respecte le délai d'au
+moins une heure depuis le test. Ctrl+C quitte les logs sans arrêter le service.
+Après le lancement en arrière-plan, le tunnel SSH et noVNC ne sont nécessaires
+que pour consulter ou intervenir dans le navigateur.
 
 Le code du site peut demander une « Vérification rapide ». Le bot attend jusqu'à
 120 secondes que le site se valide normalement. Il ne clique pas dans Turnstile,
