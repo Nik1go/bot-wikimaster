@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -27,3 +31,4 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose build
       - run: docker compose run --rm wiki-bot smoke
+      - run: docker compose run --rm wiki-bot manual-smoke
