@@ -7,9 +7,20 @@ import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
-if (!['login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke', 'use-manual-session'].includes(mode)) {
-  console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke | use-manual-session');
+const marketModes = ['market-demo', 'market-once', 'market-run', 'market-status', 'market-report', 'market-resume', 'market-reconcile', 'market-link-sale', 'market-unlock'];
+if (![...marketModes, 'login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke', 'use-manual-session'].includes(mode)) {
+  console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke | use-manual-session | ' + marketModes.join(' | '));
   process.exit(2);
+}
+if (marketModes.includes(mode)) {
+  try {
+    const { runMarketCommand } = await import('./market-cli.mjs');
+    process.exitCode = await runMarketCommand(mode, process.argv.slice(3));
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'market_error', code: error instanceof PauseError ? error.code : 'technical_error', message: error instanceof PauseError ? error.message : 'Erreur technique. Vérifier la configuration et les journaux locaux.' }));
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
 }
 const config = readConfig();
 const state = await createState(config.dataDir);
@@ -19,7 +30,7 @@ if (mode === 'resume') {
   process.exit(0);
 }
 if (mode === 'status') {
-  console.log(JSON.stringify({ browserProfile: resolveBrowserProfile(await state.get('browser-profile')), paused: await state.get('paused'), schedule: await state.get('schedule'), lastRun: await state.get('last-run') }, null, 2));
+  console.log(JSON.stringify({ packOpeningEnabled: config.packOpeningEnabled, browserProfile: resolveBrowserProfile(await state.get('browser-profile')), paused: await state.get('paused'), schedule: await state.get('schedule'), lastRun: await state.get('last-run') }, null, 2));
   process.exit(0);
 }
 if (mode === 'use-manual-session') {
@@ -35,6 +46,31 @@ if (mode === 'use-manual-session') {
   // no cookie, token or password is exported, copied or logged.
   await state.put('browser-profile', { name });
   await state.log('browser_profile_selected', { name, message: 'Profil manuel sélectionné pour le bot. Arrête le navigateur manuel avant check/once/run.' });
+  process.exit(0);
+}
+
+// Keep standby independent of an incident pause: resume cannot enable openings.
+// Exit once cleanly, or keep the service idle without loading a browser.
+if ((mode === 'run' || mode === 'once') && !config.packOpeningEnabled) {
+  await state.log('pack_opening_disabled', {
+    message: 'Ouverture automatique des paquets en veille. Aucun accès au jeu.',
+  });
+  if (mode === 'run') {
+    const standby = new AbortController();
+    const stopStandby = () => standby.abort();
+    process.once('SIGTERM', stopStandby);
+    process.once('SIGINT', stopStandby);
+    try {
+      while (!standby.signal.aborted) {
+        await sleep(15_000, undefined, { signal: standby.signal });
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') throw error;
+    } finally {
+      process.off('SIGTERM', stopStandby);
+      process.off('SIGINT', stopStandby);
+    }
+  }
   process.exit(0);
 }
 

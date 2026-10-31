@@ -17,10 +17,15 @@ function integer(env, name, fallback, min, max) {
 }
 
 export function readConfig(env = process.env) {
+  const packOpeningEnabled = env.PACK_OPENING_ENABLED ?? 'false';
+  if (packOpeningEnabled !== 'true' && packOpeningEnabled !== 'false') {
+    throw new Error('PACK_OPENING_ENABLED: true ou false requis');
+  }
   return Object.freeze({
     baseUrl: 'https://www.wiki-masters.com',
     dataDir: env.DATA_DIR || './data',
     timezone: env.TZ || 'Europe/Paris',
+    packOpeningEnabled: packOpeningEnabled === 'true',
     intervalMs: integer(env, 'INTERVAL_MINUTES', 60, 60, 1440) * 60_000,
     maxPacks: integer(env, 'MAX_PACKS_PER_SESSION', 10, 1, 10),
     packDelayMs: integer(env, 'BETWEEN_PACKS_SECONDS', 15, 3, 300) * 1000,
@@ -59,6 +64,10 @@ export function nextAllowedStart(lastStartedAt, intervalMs, now = Date.now()) {
 
 // The initial stock fixes the session quota: regeneration never extends a batch.
 export async function runBatch(site, config, { sleep, log }) {
+  if (config.packOpeningEnabled !== true) {
+    await log('pack_opening_disabled', { message: 'Ouverture automatique des paquets en veille.' });
+    return { initialStock: null, opened: 0, cards: [], skipped: true, reason: 'pack_opening_disabled' };
+  }
   const inventory = await site.prepare();
   const quota = Math.min(inventory.available, config.maxPacks);
   const result = { initialStock: inventory.available, opened: 0, cards: [] };

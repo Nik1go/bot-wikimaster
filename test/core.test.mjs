@@ -6,8 +6,28 @@ import path from 'node:path';
 import { readConfig, parseInventory, nextAllowedStart, resolveBrowserProfile, runBatch, PauseError } from '../src/core.mjs';
 import { createState } from '../src/state.mjs';
 
-const config = readConfig({});
+const config = readConfig({ PACK_OPENING_ENABLED: 'true' });
 const quiet = { sleep: async () => {}, log: async () => {} };
+
+test('ouvertures en veille par défaut et activation strictement explicite', () => {
+  assert.equal(readConfig({}).packOpeningEnabled, false);
+  assert.equal(readConfig({ PACK_OPENING_ENABLED: 'false' }).packOpeningEnabled, false);
+  assert.equal(config.packOpeningEnabled, true);
+  for (const value of ['', 'yes', '1', 'TRUE']) {
+    assert.throws(() => readConfig({ PACK_OPENING_ENABLED: value }));
+  }
+});
+
+test('veille : aucun accès au site et aucune ouverture', async () => {
+  const forbidden = async () => assert.fail('aucun appel au site en veille');
+  const events = [];
+  const result = await runBatch({ prepare: forbidden, openOne: forbidden }, readConfig({}), {
+    ...quiet, log: async event => events.push(event),
+  });
+  assert.equal(result.opened, 0);
+  assert.equal(result.reason, 'pack_opening_disabled');
+  assert.deepEqual(events, ['pack_opening_disabled']);
+});
 
 test('profil par défaut et sélection explicite du profil manuel', () => {
   assert.equal(resolveBrowserProfile(null), 'chromium');

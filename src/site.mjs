@@ -46,6 +46,9 @@ export class WikiMastersSite {
   }
 
   async openOne() {
+    if (this.config.packOpeningEnabled !== true) {
+      throw new PauseError('pack_opening_disabled', 'Ouverture automatique des paquets en veille.');
+    }
     await this.checkLogin();
     const before = parseInventory(await this.text());
     if (before.available === 0) {

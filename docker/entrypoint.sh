@@ -2,8 +2,13 @@
 set -Eeuo pipefail
 umask 077
 
+# Standby needs no desktop, VNC server or browser process.
+if [[ ( "${1:-run}" == "run" || "${1:-run}" == "once" ) && "${PACK_OPENING_ENABLED:-false}" != "true" ]]; then
+  exec node /app/src/index.mjs "$@"
+fi
+
 # Control commands need neither the desktop nor another browser instance.
-if [[ "${1:-run}" == "resume" || "${1:-run}" == "status" || "${1:-run}" == "use-manual-session" ]]; then
+if [[ "${1:-run}" == "resume" || "${1:-run}" == "status" || "${1:-run}" == "use-manual-session" || "${1:-run}" == "market-demo" || "${1:-run}" == "market-status" || "${1:-run}" == "market-report" || "${1:-run}" == "market-resume" || "${1:-run}" == "market-unlock" ]]; then
   exec node /app/src/index.mjs "$@"
 fi
 

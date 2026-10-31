@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { readConfig, PauseError } from '../src/core.mjs';
 import { WikiMastersSite } from '../src/site.mjs';
 
-const base = readConfig({});
+const base = readConfig({ PACK_OPENING_ENABLED: 'true' });
 
 // Simulated browser boundary: the real UI selectors are validated separately by
 // observation. These tests exercise challenge, response and click coordination.
@@ -88,6 +88,11 @@ class FakePage extends EventEmitter {
     } }) };
   }
 }
+
+test('veille : un appel direct à openOne est arrêté avant tout accès à la page', async () => {
+  const page = { setDefaultTimeout() {}, url() { assert.fail('aucune lecture de page en veille'); } };
+  await assert.rejects(new WikiMastersSite(page, readConfig({})).openOne(), error => error.code === 'pack_opening_disabled');
+});
 
 test('un clic gratuit puis cinq révélations et retour au stock', async () => {
   const page = new FakePage();

@@ -1,13 +1,30 @@
-# WikiMasters — ouvertures une fois par heure
+# WikiMasters — marché en simulation, paquets en veille
+
+La première version du marché est disponible : sélection d’une légendaire à la
+fois, plafond 3 500 WB et 50 % de la référence, contrôle du portefeuille,
+classement par plus grand écart en WB, suivi des contre-enchères et logs explicatifs.
+Elle est livrée en simulation ; aucun achat ne démarre par défaut.
+Voir [les règles, commandes et limites du marché](MARKET.md) et lancer
+`docker compose run --rm wiki-bot market-demo` pour une démo sans accès au site.
 
 Prototype pour un VPS Ubuntu avec Docker Compose. Il utilise un Chromium avec
 un profil conservé dans un volume Docker. Connexion manuelle dans le navigateur
-du VPS, puis une session toutes les 60 minutes.
+du VPS. Les ouvertures automatiques sont désormais désactivées par défaut avec
+`PACK_OPENING_ENABLED=false`, y compris si un ancien `.env` ne contient pas encore
+cette variable.
 
-À chaque session, il ouvre les paquets gratuits disponibles au départ, au maximum
+En veille, `run` garde le service actif sans lancer Chromium, noVNC ou une requête
+vers le jeu ; `once` se termine sans ouverture. Le journal indique
+`pack_opening_disabled`. La commande `resume` ne réactive pas les paquets.
+`status` affiche `packOpeningEnabled: false`. Les modes manuels et le contrôle
+en lecture seule `check` restent disponibles sur demande. Les commandes du marché
+sont distinctes et documentées dans [MARKET.md](MARKET.md).
+
+Si les ouvertures sont explicitement réactivées, les sessions sont espacées d'au
+moins 60 minutes. À chaque session, il ouvre les paquets gratuits disponibles au départ, au maximum
 10. Par défaut : 15 secondes entre les paquets et 2 secondes entre les cartes.
-Le quota ne s'étend pas aux paquets régénérés pendant la session. Aucune action
-sur la boutique, le marché, les échanges, les favoris ou les paquets payants.
+Le quota ne s'étend pas aux paquets régénérés pendant la session. Le module des
+paquets ne touche pas à la boutique, au marché, aux échanges, aux favoris ou aux paquets payants.
 
 Les pauses servent à espacer les actions. Elles ne garantissent ni une apparence
 humaine ni une absence de détection. Les règles de WikiMasters interdisent
@@ -71,12 +88,13 @@ pause, règle le problème dans le mode `login`, puis lève la pause :
 docker compose run --rm wiki-bot resume
 ```
 
-### 3. Première session, puis service horaire
+### 3. Service en veille
 
-Pour une seule session réelle :
+Conserve `PACK_OPENING_ENABLED=false` dans `.env`. Pour vérifier la veille :
 
 ```bash
 docker compose run --rm wiki-bot once
+docker compose run --rm wiki-bot status
 ```
 
 Pour lancer le service :
@@ -86,7 +104,8 @@ docker compose up -d
 docker compose logs -f --tail=50 wiki-bot
 ```
 
-Le premier lancement est immédiat, sauf si une session a déjà démarré il y a
+En veille, aucune session de paquets ne démarre. Si les ouvertures sont
+explicitement réactivées, le premier lancement est immédiat, sauf si une session a déjà démarré il y a
 moins d'une heure. Ensuite, les départs sont espacés d'au moins 60 minutes.
 Les redémarrages conservent cette limite. Les heures de log sont en UTC.
 
@@ -98,6 +117,19 @@ docker compose stop
 ```
 
 ## Mise à jour depuis GitHub
+
+Pour une instance qui tourne encore avec l'ancienne version, commence par
+`sudo docker compose stop wiki-bot` sur le VPS. Mettre à jour les fichiers locaux
+ne stoppe pas le conteneur distant. Une fois cette version transférée et
+`PACK_OPENING_ENABLED=false` conservé dans `.env`, reconstruis le service :
+
+```bash
+sudo docker compose up -d --build --force-recreate wiki-bot
+sudo docker compose logs --tail=20 wiki-bot
+```
+
+La ligne attendue est `pack_opening_disabled` ; aucun navigateur n'est lancé
+par le service en veille.
 
 Dans le dossier du projet sur le VPS :
 
@@ -171,29 +203,27 @@ sudo docker compose run --rm wiki-bot check
 Le bureau noVNC se déconnecte quand ce conteneur est arrêté : c'est attendu.
 N'exécute pas le mode manuel et le bot en même temps sur ce profil.
 
-Si `check_ok` apparaît et indique au moins un paquet, teste une seule ouverture :
+Si `check_ok` apparaît, conserve les paquets en veille et vérifie la configuration :
 
 ```bash
-sudo docker compose run --rm wiki-bot resume
-sudo docker compose run --rm -e MAX_PACKS_PER_SESSION=1 wiki-bot once
+sudo docker compose run --rm wiki-bot status
+sudo docker compose run --rm wiki-bot once
 ```
 
-`resume` lève une pause précédente sans annuler le délai horaire. Un test réussi
-écrit `pack_opened` puis `session_finished` avec `opened: 1`. Si `hourly_limit`
-apparaît, attends la date `nextRun`. Avec un stock nul, `opened: 0` est normal.
-Si le contrôle Cloudflare échoue, le bot se met en pause et le test s'arrête.
+`status` doit afficher `packOpeningEnabled: false` et `once` doit écrire
+`pack_opening_disabled`. Aucun paquet ne s'ouvre. `resume` lève seulement une
+pause après incident, sans réactiver les ouvertures ni annuler le délai horaire.
 
-Après une ouverture réussie :
+Pour garder le service en veille :
 
 ```bash
 sudo docker compose up -d
 sudo docker compose logs -f --tail=50 wiki-bot
 ```
 
-Le service réutilise désormais le profil sélectionné et respecte le délai d'au
-moins une heure depuis le test. Ctrl+C quitte les logs sans arrêter le service.
-Après le lancement en arrière-plan, le tunnel SSH et noVNC ne sont nécessaires
-que pour consulter ou intervenir dans le navigateur.
+Le profil sélectionné est conservé, mais le service en veille ne l'ouvre pas.
+Ctrl+C quitte les logs sans arrêter le service. Le tunnel SSH et noVNC restent
+utiles pour les modes manuels, lancés explicitement.
 
 Le code du site peut demander une « Vérification rapide ». Le bot attend jusqu'à
 120 secondes que le site se valide normalement. Il ne clique pas dans Turnstile,
@@ -231,6 +261,7 @@ Modifie `.env`, puis applique avec `docker compose up -d --force-recreate`.
 
 | Variable | Défaut | Effet |
 | --- | --- | --- |
+| `PACK_OPENING_ENABLED` | `false` | Veille des paquets ; seul `true` réactive explicitement les ouvertures |
 | `INTERVAL_MINUTES` | `60` | Minutes entre les départs, minimum 60 |
 | `MAX_PACKS_PER_SESSION` | `10` | Maximum d'ouvertures par session, de 1 à 10 |
 | `BETWEEN_PACKS_SECONDS` | `15` | Pause entre les paquets, de 3 à 300 s |
