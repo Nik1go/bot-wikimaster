@@ -58,7 +58,7 @@ export function buildReference(sales, auction, config, now = Date.now()) {
   const unique = new Map();
   for (const sale of sales) {
     const at = Date.parse(sale?.settled_at);
-    if (!sale?.id || unique.has(sale.id) || !money(sale.final_price) || sale.final_price < 1) continue;
+    if (typeof sale?.id !== 'string' || !sale.id || unique.has(sale.id) || !money(sale.final_price) || sale.final_price < 1) continue;
     if (sale.rarity !== 'L' || (sale.card_id != null && sale.card_id !== auction.card_id)) continue;
     if (sale.status != null && sale.status !== 'settled_sold') continue;
     if (!Number.isFinite(at) || at > now || now - at > config.historyAgeMs) continue;
@@ -78,6 +78,7 @@ export function buildReference(sales, auction, config, now = Date.now()) {
     rarity: 'L',
     mean: Math.round(total / selected.length),
     median: (values[Math.floor((values.length - 1) / 2)] + values[Math.floor(values.length / 2)]) / 2,
+    lowerQuartile: values[Math.ceil(values.length / 4) - 1],
     sampleCount: selected.length,
     saleIds: selected.map(s => s.id),
     oldestSaleAt: selected.at(-1).settled_at,

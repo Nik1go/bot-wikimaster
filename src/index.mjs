@@ -7,7 +7,7 @@ import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
-const marketModes = ['market-demo', 'market-once', 'market-run', 'market-status', 'market-report', 'market-resume', 'market-reconcile', 'market-link-sale', 'market-unlock'];
+const marketModes = ['market-demo', 'market-compare', 'market-once', 'market-run', 'market-status', 'market-report', 'market-resume', 'market-reconcile', 'market-link-sale', 'market-unlock'];
 if (![...marketModes, 'login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke', 'use-manual-session'].includes(mode)) {
   console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke | use-manual-session | ' + marketModes.join(' | '));
   process.exit(2);

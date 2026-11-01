@@ -10,6 +10,10 @@ import { readMarketEvents, renderMarketReport } from './market-report.mjs';
 import { marketDemo } from './market-demo.mjs';
 
 export async function runMarketCommand(command, args = [], env = process.env) {
+  if (command === 'market-compare') {
+    const { runComparisonCommand } = await import('./market-compare.mjs');
+    return runComparisonCommand(args);
+  }
   if (command === 'market-demo') {
     console.log((await marketDemo()).report);
     return 0;

@@ -9,6 +9,7 @@
     "test": "node --test",
     "check": "node src/index.mjs check",
     "market:demo": "node src/index.mjs market-demo",
+    "market:compare": "node src/index.mjs market-compare",
     "market:once": "node src/index.mjs market-once",
     "market:report": "node src/index.mjs market-report"
   },

@@ -45,6 +45,11 @@ sur les occasions effectivement évaluées.
 
 ## Vérifier la livraison sans contacter le site
 
+La comparaison hors ligne des seuils de **20 % et 30 % de décote** dispose de sa
+[commande et de son format d’instantané](docs/market-comparison.md). Elle utilise
+la même base de prix prudente dans les deux scénarios et garde le classement en
+WB. Ces seuils expérimentaux ne modifient pas le plafond à 50 % du service V1.
+
 Après récupération du code et reconstruction de l’image :
 
 ```bash

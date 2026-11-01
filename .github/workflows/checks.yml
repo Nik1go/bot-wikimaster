@@ -30,5 +30,7 @@ jobs:
       - run: bash -n docker/entrypoint.sh
       - run: docker compose config --quiet
       - run: docker compose build
+      - name: Offline comparison without a desktop
+        run: docker compose run --rm -e DISPLAY=invalid wiki-bot market-compare --demo
       - run: docker compose run --rm wiki-bot smoke
       - run: docker compose run --rm wiki-bot manual-smoke

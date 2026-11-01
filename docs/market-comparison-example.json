@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "source": "fictional",
+  "observedAt": "2026-11-01T12:00:00Z",
+  "account": {
+    "userId": "demo-buyer",
+    "balance": 5000,
+    "positionOccupied": false,
+    "reserveWB": 0
+  },
+  "auctions": [
+    {
+      "id": "auction-a",
+      "card_id": "card-a",
+      "seller_id": "demo-seller",
+      "status": "active",
+      "base_amount": 3100,
+      "current_bid": null,
+      "current_bidder_id": null,
+      "snapshot_rarity": "L",
+      "is_shiny": false,
+      "end_at": "2026-11-01T12:01:30Z",
+      "card": {
+        "rarity": "L",
+        "wikipedia_title": "Démo A : décote discrète",
+        "image_url": "https://example.invalid/demo.png",
+        "hide_image": false
+      }
+    },
+    {
+      "id": "auction-b",
+      "card_id": "card-b",
+      "seller_id": "demo-seller",
+      "status": "active",
+      "base_amount": 1600,
+      "current_bid": null,
+      "current_bidder_id": null,
+      "snapshot_rarity": "L",
+      "is_shiny": false,
+      "end_at": "2026-11-01T12:01:30Z",
+      "card": {
+        "rarity": "L",
+        "wikipedia_title": "Démo B : décote plus forte",
+        "image_url": "https://example.invalid/demo.png",
+        "hide_image": false
+      }
+    },
+    {
+      "id": "auction-c",
+      "card_id": "card-c",
+      "seller_id": "demo-seller",
+      "status": "active",
+      "base_amount": 2300,
+      "current_bid": null,
+      "current_bidder_id": null,
+      "snapshot_rarity": "L",
+      "is_shiny": false,
+      "end_at": "2026-11-01T12:01:30Z",
+      "card": {
+        "rarity": "L",
+        "wikipedia_title": "Démo C : moyenne gonflée",
+        "image_url": "https://example.invalid/demo.png",
+        "hide_image": false
+      }
+    },
+    {
+      "id": "auction-d",
+      "card_id": "card-d",
+      "seller_id": "demo-seller",
+      "status": "active",
+      "base_amount": 3600,
+      "current_bid": null,
+      "current_bidder_id": null,
+      "snapshot_rarity": "L",
+      "is_shiny": false,
+      "end_at": "2026-11-01T12:01:30Z",
+      "card": {
+        "rarity": "L",
+        "wikipedia_title": "Démo D : budget dépassé",
+        "image_url": "https://example.invalid/demo.png",
+        "hide_image": false
+      }
+    }
+  ],
+  "salesByCard": {
+    "card-a": [
+      {
+        "id": "sale-a-0",
+        "card_id": "card-a",
+        "rarity": "L",
+        "final_price": 4000,
+        "is_shiny": false,
+        "settled_at": "2026-10-31T12:00:00.000Z"
+      },
+      {
+        "id": "sale-a-1",
+        "card_id": "card-a",
+        "rarity": "L",
+        "final_price": 4000,
+        "is_shiny": false,
+        "settled_at": "2026-10-30T12:00:00.000Z"
+      },
+      {
+        "id": "sale-a-2",
+        "card_id": "card-a",
+        "rarity": "L",
+        "final_price": 4000,
+        "is_shiny": false,
+        "settled_at": "2026-10-29T12:00:00.000Z"
+      },
+      {
+        "id": "sale-a-3",
+        "card_id": "card-a",
+        "rarity": "L",
+        "final_price": 4000,
+        "is_shiny": false,
+        "settled_at": "2026-10-28T12:00:00.000Z"
+      },
+      {
+        "id": "sale-a-4",
+        "card_id": "card-a",
+        "rarity": "L",
+        "final_price": 4000,
+        "is_shiny": false,
+        "settled_at": "2026-10-27T12:00:00.000Z"
+      }
+    ],
+    "card-b": [
+      {
+        "id": "sale-b-0",
+        "card_id": "card-b",
+        "rarity": "L",
+        "final_price": 2400,
+        "is_shiny": false,
+        "settled_at": "2026-10-31T12:00:00.000Z"
+      },
+      {
+        "id": "sale-b-1",
+        "card_id": "card-b",
+        "rarity": "L",
+        "final_price": 2400,
+        "is_shiny": false,
+        "settled_at": "2026-10-30T12:00:00.000Z"
+      },
+      {
+        "id": "sale-b-2",
+        "card_id": "card-b",
+        "rarity": "L",
+        "final_price": 2400,
+        "is_shiny": false,
+        "settled_at": "2026-10-29T12:00:00.000Z"
+      },
+      {
+        "id": "sale-b-3",
+        "card_id": "card-b",
+        "rarity": "L",
+        "final_price": 2400,
+        "is_shiny": false,
+        "settled_at": "2026-10-28T12:00:00.000Z"
+      },
+      {
+        "id": "sale-b-4",
+        "card_id": "card-b",
+        "rarity": "L",
+        "final_price": 2400,
+        "is_shiny": false,
+        "settled_at": "2026-10-27T12:00:00.000Z"
+      }
+    ],
+    "card-c": [
+      {
+        "id": "sale-c-0",
+        "card_id": "card-c",
+        "rarity": "L",
+        "final_price": 2000,
+        "is_shiny": false,
+        "settled_at": "2026-10-31T12:00:00.000Z"
+      },
+      {
+        "id": "sale-c-1",
+        "card_id": "card-c",
+        "rarity": "L",
+        "final_price": 2000,
+        "is_shiny": false,
+        "settled_at": "2026-10-30T12:00:00.000Z"
+      },
+      {
+        "id": "sale-c-2",
+        "card_id": "card-c",
+        "rarity": "L",
+        "final_price": 2000,
+        "is_shiny": false,
+        "settled_at": "2026-10-29T12:00:00.000Z"
+      },
+      {
+        "id": "sale-c-3",
+        "card_id": "card-c",
+        "rarity": "L",
+        "final_price": 2000,
+        "is_shiny": false,
+        "settled_at": "2026-10-28T12:00:00.000Z"
+      },
+      {
+        "id": "sale-c-4",
+        "card_id": "card-c",
+        "rarity": "L",
+        "final_price": 10000,
+        "is_shiny": false,
+        "settled_at": "2026-10-27T12:00:00.000Z"
+      }
+    ],
+    "card-d": [
+      {
+        "id": "sale-d-0",
+        "card_id": "card-d",
+        "rarity": "L",
+        "final_price": 6000,
+        "is_shiny": false,
+        "settled_at": "2026-10-31T12:00:00.000Z"
+      },
+      {
+        "id": "sale-d-1",
+        "card_id": "card-d",
+        "rarity": "L",
+        "final_price": 6000,
+        "is_shiny": false,
+        "settled_at": "2026-10-30T12:00:00.000Z"
+      },
+      {
+        "id": "sale-d-2",
+        "card_id": "card-d",
+        "rarity": "L",
+        "final_price": 6000,
+        "is_shiny": false,
+        "settled_at": "2026-10-29T12:00:00.000Z"
+      },
+      {
+        "id": "sale-d-3",
+        "card_id": "card-d",
+        "rarity": "L",
+        "final_price": 6000,
+        "is_shiny": false,
+        "settled_at": "2026-10-28T12:00:00.000Z"
+      },
+      {
+        "id": "sale-d-4",
+        "card_id": "card-d",
+        "rarity": "L",
+        "final_price": 6000,
+        "is_shiny": false,
+        "settled_at": "2026-10-27T12:00:00.000Z"
+      }
+    ]
+  }
+}
