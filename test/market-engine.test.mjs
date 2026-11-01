@@ -248,3 +248,22 @@ test('gagnant manquant dans le règlement réel : place conservée, aucun nouvel
   assert.equal(f.engine.openPositions().length, 1);
   assert.equal(f.calls.filter(c => c[0] === 'bid').length, 1);
 });
+
+test('première mesure conservée et variation de latence visible dans les confirmations', async () => {
+  const f = await fixture({ MARKET_MODE: 'live', MARKET_LIVE_ENABLED: 'true' });
+  const submit = f.api.bid;
+  let roundTripMs = 250;
+  f.api.bid = async (...args) => ({ ...(await submit(...args)), clientTiming: { measurement: 'client_round_trip', roundTripMs } });
+  await f.engine.tick();
+  const b = f.auctions.get(B);
+  b.current_bid = 2900; b.current_bidder_id = 'other';
+  f.setBalance(5000);
+  roundTripMs = 400;
+  await f.engine.tick();
+  const saved = await f.store.get('book');
+  assert.equal(saved.positions[0].firstBidTiming.roundTripMs, 250);
+  assert.equal(saved.positions[0].lastBidTiming.roundTripMs, 400);
+  const confirmations = f.events.filter(e => e.event === 'bid_confirmed');
+  assert.equal(confirmations[1].deltaFromFirstRoundTripMs, 150);
+  assert.ok(confirmations[1].message.includes('400 ms'));
+});

@@ -12,6 +12,7 @@ function fixture(replies, env = {}) {
     calls.push({ url, options, at: clock });
     const reply = replies.shift();
     if (reply instanceof Error) throw reply;
+    clock += reply.elapsedMs ?? 0;
     return {
       status: () => reply.status ?? 200,
       json: async () => { if (reply.invalidJson) throw new Error('html'); return reply.body; },
@@ -19,7 +20,7 @@ function fixture(replies, env = {}) {
     };
   } };
   const api = new MarketApi(request, readMarketConfig(env), {
-    now: () => clock, sleep: async ms => { clock += ms; },
+    now: () => clock, monotonicNow: () => clock, sleep: async ms => { clock += ms; },
     log: async (event, details) => { events.push({ event, ...details }); },
   });
   return { api, calls, events };
@@ -72,4 +73,23 @@ test('valeurs invalides et chemins étrangers sont refusés localement', async (
   await assert.rejects(api.auction('../../packs/open'));
   await assert.rejects(api.call('https://other.example/api/marketplace'));
   assert.equal(calls.length, 0);
+});
+
+test('latence mesurée sur les requêtes existantes, sans inclure la pause entre deux appels', async () => {
+  const { api, calls, events } = fixture([
+    { elapsedMs: 125, body: { current_bid: 100, bidder_balance: 900 } },
+    { elapsedMs: 400, body: { current_bid: 200, bidder_balance: 800 } },
+  ], { MARKET_MODE: 'live', MARKET_LIVE_ENABLED: 'true' });
+  const first = await api.bid(ID, 100);
+  const second = await api.bid(ID, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(first.clientTiming.roundTripMs, 125);
+  assert.equal(first.clientTiming.requestStartedAt, '1970-01-01T00:00:01.000Z');
+  assert.equal(first.clientTiming.responseReceivedAt, '1970-01-01T00:00:01.125Z');
+  assert.equal(second.clientTiming.roundTripMs, 400);
+  assert.equal(second.clientTiming.sessionSampleCount, 2);
+  assert.equal(second.clientTiming.sessionMinMs, 125);
+  assert.equal(second.clientTiming.sessionMaxMs, 400);
+  assert.equal(second.clientTiming.sessionMedianMs, 262.5);
+  assert.ok(events.every(e => e.timing.measurement === 'client_round_trip'));
 });

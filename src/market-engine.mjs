@@ -199,11 +199,22 @@ export class MarketEngine {
       throw new PauseError('bid_confirmation_pending', 'Réponse de mise incomplète : résultat à vérifier, sans nouvel envoi.');
     }
     position.lastBid = result.current_bid;
+    const timing = result.clientTiming && Number.isFinite(result.clientTiming.roundTripMs) ? result.clientTiming : null;
+    if (timing) {
+      position.firstBidTiming ??= timing;
+      position.lastBidTiming = timing;
+    }
     delete position.serverMinimum;
     position.status = 'leading';
     this.book.pending = null;
     await this.save();
-    await this.log('bid_confirmed', { auctionId: position.auctionId, title: position.title, amount: result.current_bid, balance: result.bidder_balance, message: `Mise acceptée : ${result.current_bid} WB ; solde ${result.bidder_balance} WB.` });
+    await this.log('bid_confirmed', {
+      auctionId: position.auctionId, title: position.title, amount: result.current_bid, balance: result.bidder_balance,
+      timing,
+      deltaFromFirstRoundTripMs: timing && Number.isFinite(position.firstBidTiming?.roundTripMs)
+        ? Math.round((timing.roundTripMs - position.firstBidTiming.roundTripMs) * 100) / 100 : null,
+      message: `Mise acceptée : ${result.current_bid} WB ; solde ${result.bidder_balance} WB.` + (timing ? ` Aller-retour côté bot : ${timing.roundTripMs} ms.` : ''),
+    });
   }
 
   async finish(position, auction) {

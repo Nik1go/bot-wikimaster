@@ -142,6 +142,18 @@ se met en pause et conserve la position pour vérification.
 
 ## Logs et diagnostic
 
+Chaque requête existante mesure son aller-retour côté bot avec une horloge
+monotone. Une mise confirmée journalise `requestStartedAt`, `responseReceivedAt`
+et `roundTripMs`. La première mesure de la position est conservée, les suivantes
+indiquent leur variation ; le minimum, maximum et la médiane portent sur les
+20 dernières mises confirmées dans la session. Aucune requête de sondage n’est
+ajoutée pour mesurer ces délais.
+
+Cet aller-retour inclut le transport et le traitement serveur. Il ne mesure pas
+le délai aller seul et ne permet pas de connaître l’instant exact d’arrivée
+au marché. La V1 n’en déduit aucune heure de mise et n’ajoute pas de stratégie
+visant un dysfonctionnement du site à 11 secondes restantes.
+
 ```bash
 sudo docker compose run --rm wiki-bot market-status
 sudo docker compose run --rm wiki-bot market-report

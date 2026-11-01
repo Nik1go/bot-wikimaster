@@ -16,12 +16,14 @@ export class MarketApiError extends PauseError {
 }
 
 export class MarketApi {
-  constructor(request, config, { log, sleep, now = Date.now }) {
+  constructor(request, config, { log, sleep, now = Date.now, monotonicNow = () => performance.now() }) {
     this.request = request;
     this.config = config;
     this.log = log;
     this.sleep = sleep;
     this.now = now;
+    this.monotonicNow = monotonicNow;
+    this.bidRoundTrips = [];
     this.nextRequestAt = 0;
     this.blocked = false;
   }
@@ -37,6 +39,9 @@ export class MarketApi {
     const wait = this.nextRequestAt - this.now();
     if (wait > 0) await this.sleep(wait);
     const started = this.now();
+    const monotonicStarted = this.monotonicNow();
+    let timing = null;
+    this.lastTiming = null;
     let response;
     let body;
     let status;
@@ -50,6 +55,12 @@ export class MarketApi {
         maxRetries: 0,
         failOnStatusCode: false,
       });
+      timing = {
+        measurement: 'client_round_trip',
+        requestStartedAt: new Date(started).toISOString(),
+        responseReceivedAt: new Date(this.now()).toISOString(),
+        roundTripMs: Math.round(Math.max(0, this.monotonicNow() - monotonicStarted) * 100) / 100,
+      };
       status = response.status();
       try { body = await response.json(); }
       catch {
@@ -81,7 +92,8 @@ export class MarketApi {
           minimum: money(body.min) ? body.min : null,
         });
       }
-      await this.log('api_ok', { message: `${method} ${path.split('?')[0]} : HTTP ${status}.`, method, path: path.split('?')[0], status, durationMs: this.now() - started });
+      this.lastTiming = timing;
+      await this.log('api_ok', { message: `${method} ${path.split('?')[0]} : HTTP ${status}, aller-retour ${timing.roundTripMs} ms.`, method, path: path.split('?')[0], status, durationMs: timing.roundTripMs, timing });
       return body;
     } catch (error) {
       const failure = error instanceof MarketApiError ? error : new MarketApiError('network_error', 'Erreur réseau ou délai dépassé. Aucun nouvel essai automatique.', {
@@ -90,7 +102,7 @@ export class MarketApi {
       // A moving bid minimum is an ordinary race. Every other refusal stops
       // the adapter, including when callers accidentally try another read.
       if (!['bid_too_low', 'auction_ended'].includes(failure.code)) this.blocked = true;
-      await this.log('api_error', { message: failure.message, code: failure.code, method, path: path.split('?')[0], status: failure.status, uncertain: failure.uncertain });
+      await this.log('api_error', { message: failure.message, code: failure.code, method, path: path.split('?')[0], status: failure.status, uncertain: failure.uncertain, timing });
       throw failure;
     } finally {
       this.nextRequestAt = this.now() + this.config.requestGapMs;
@@ -136,6 +148,19 @@ export class MarketApi {
 
   async bid(auctionId, amount) {
     if (!money(amount) || amount < 1 || amount > this.config.maxPerCard) throw new PauseError('invalid_bid', 'Mise hors plafond refusée avant envoi.');
-    return this.call(`/api/marketplace/${id(auctionId)}/bid`, 'POST', { amount });
+    const result = await this.call(`/api/marketplace/${id(auctionId)}/bid`, 'POST', { amount });
+    this.bidRoundTrips.push(this.lastTiming.roundTripMs);
+    if (this.bidRoundTrips.length > 20) this.bidRoundTrips.shift();
+    const sorted = this.bidRoundTrips.toSorted((a, b) => a - b);
+    return {
+      ...result,
+      clientTiming: {
+        ...this.lastTiming,
+        sessionSampleCount: sorted.length,
+        sessionMinMs: sorted[0],
+        sessionMaxMs: sorted.at(-1),
+        sessionMedianMs: (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2,
+      },
+    };
   }
 }
