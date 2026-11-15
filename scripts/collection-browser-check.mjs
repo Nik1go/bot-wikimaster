@@ -37,25 +37,29 @@ const server = createServer(async(req,res)=>{
   const cards=${JSON.stringify(cards)}; const saved=new Set(${JSON.stringify([...labels])});
   const selectionMode=${JSON.stringify(selectionMode)};
   const headingMismatch=${JSON.stringify(headingMismatch)};
+  const names={Toutes:'Toutes',C:'Commun',PC:'Peu commun',R:'Rare',SR:'Super Rare',UR:'Ultra Rare',L:'Légendaire'};
   let page=1, active=null, selected=new Set(), market=false, rarities=new Set(['R']);
   const esc=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
   function renderGrid(){
+    const visible=cards.map((card,index)=>({card,index})).filter(({card})=>selected.size===0||selected.has(card.rarity));
+    const totalPages=Math.max(1,Math.ceil(visible.length/2));
+    if(page>totalPages)page=1;
     document.getElementById('filters').innerHTML=['L','UR','SR','R','PC','C'].map(r=>'<button class="'+(selected.has(r)?'ring-2':'')+'" onclick="filter(\''+r+'\')">'+r+'</button>').join('')+(selected.size?'<button onclick="selected.clear();renderGrid()">Réinitialiser rareté</button>':'');
-    document.getElementById('grid').innerHTML=cards.slice((page-1)*2,page*2).map((c,k)=>'<div class="cursor-pointer"><img src="/rarity/rare.webp"><div>'+c.rarity+'</div><div><h3 onclick="openCard('+((page-1)*2+k)+')">'+esc(c.title)+'</h3><span class="font-bold">1 234</span><span class="font-bold">5 678</span></div></div>').join('');
-    document.getElementById('pager').innerHTML='<button>Page '+page+' / 3</button><button '+(page===3?'disabled':'')+' onclick="page++;renderGrid()">Suivant →</button>';
+    document.getElementById('grid').innerHTML=visible.slice((page-1)*2,page*2).map(({card:c,index})=>'<div class="cursor-pointer"><img src="/rarity/rare.webp"><div>'+c.rarity+'</div><div><h3 onclick="openCard('+index+')">'+esc(c.title)+'</h3><span class="font-bold">1 234</span><span class="font-bold">5 678</span></div></div>').join('')||(visible.length?'':'Aucune carte');
+    document.getElementById('pager').innerHTML=totalPages>1?'<button>Page '+page+' / '+totalPages+'</button><button '+(page===totalPages?'disabled':'')+' onclick="page++;renderGrid()">Suivant →</button>':'';
   }
   function filter(r){ selected.has(r)?selected.delete(r):selected.add(r);renderGrid(); }
   function openCard(i){active=i;market=false;rarities=new Set([selectionMode==='exclusive'?'Toutes':'R']);renderModal();}
   function renderModal(){
-    const c=cards[active]; const name={R:'Rare',PC:'Peu commun',C:'Commun'}[c.rarity];
+    const c=cards[active]; const name=names[c.rarity];
     let content='';
     if(market){
       if(c.rarity==='C') content="<h3>10 dernières ventes</h3><p>Aucune vente pour l'instant.</p>";
       else {
-        content=(selectionMode==='exclusive'?['Toutes','R','PC','SR']:['R','PC']).map(r=>'<button aria-pressed="'+rarities.has(r)+'" onclick="toggle(\''+r+'\')">'+({Toutes:'Toutes',R:'Rare',PC:'Peu commun',SR:'Super Rare'}[r])+'</button>').join('');
+        content=(selectionMode==='exclusive'?['Toutes','C','PC','R','SR','UR','L']:['R','PC']).map(r=>'<button aria-pressed="'+rarities.has(r)+'" onclick="toggle(\''+r+'\')">'+names[r]+'</button>').join('');
         const sole=rarities.size===1?[...rarities][0]:null;
         const avg=sole===c.rarity && c.average!=null?c.average:sole==='PC'?'60':c.rarity==='R'?'50':'999';
-        const heading=sole?({Toutes:'Toutes',R:'Rare',PC:'Peu commun',SR:'Super Rare'}[sole]):'Rare, Peu commun';
+        const heading=sole?names[sole]:'Rare, Peu commun';
         content+='<h3>Évolution des prix</h3><div><p>Ventes</p><p>'+(c.sales??81)+'</p></div><div><p>Moyenne</p><p>'+avg+'</p></div><h3>10 dernières ventes · '+(headingMismatch?'Super Rare':heading)+'</h3>';
       }
     }else content='<p>Étiquettes</p>'+(saved.has(active)?'<button aria-label="Retirer l\'étiquette à vendre">×</button>':'')+'<input role="combobox" oninput="options()"><ul role="listbox" hidden><li role="option"><button onclick="tag()">'+(saved.size?'à vendre':'Créer à vendre')+'</button></li></ul>';
@@ -100,4 +104,15 @@ try {
   assert.equal(labels.size,0); assert.equal(writes,2); site.dispose(); headingMismatch=false;
   console.log(`OK : filtre ${selectionMode} — rareté isolée, doublons, pagination, simulation, étiquettes persistantes, refus HTTP 429 sans nouvelle tentative.`);
   }
+  selectionMode='exclusive'; refusal=false; labels.clear(); writes=0;
+  for (const rarity of ['R','C','SR','UR','L']) {
+    const custom={...readCollectionConfig({COLLECTION_RARITIES:rarity,COLLECTION_MIN_AVERAGE:'70',COLLECTION_MIN_SALES:'80'}),delayMs:0,timeoutMs:3000};
+    if (['SR','UR','L'].includes(rarity)) cards.push({title:`Exemple ${rarity}`,rarity,stats:['1 234','5 678'],average:75,sales:90});
+    const site=new CollectionSite(page,custom,{sleep,log:async()=>{},baseUrl:origin});
+    const result=await scanCollection(site,custom,state(),{sleep});
+    assert.equal(result.totals.checked,rarity==='R'?2:1);
+    assert.equal(result.totals.eligible,['SR','UR','L'].includes(rarity)?1:0);
+    assert.equal(writes,0); site.dispose();
+  }
+  console.log('OK : réglages env — raretés R/C/SR/UR/L, seuils personnalisés, collection sur une seule page sans pagination.');
 } finally { await browser.close(); server.close(); }

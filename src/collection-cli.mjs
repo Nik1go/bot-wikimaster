@@ -118,7 +118,7 @@ export async function runCollectionCommand(command, args = [], env = process.env
     heartbeat = setInterval(() => {
       store.get('current').then(current => log('collection_heartbeat', { current, message: current ? `En cours : page ${current.page}, carte ${current.index}, ${current.title} [${current.rarity}], étape ${current.step}.` : 'Préparation du parcours en cours.' })).catch(() => {});
     }, 30_000);
-    await log('collection_started', { message: `Analyse C/PC/R en ${config.apply ? 'étiquetage réel' : 'simulation'} : moyenne > ${config.minAverage} WB et ventes > ${config.minSales}.`, limit: Number.isFinite(limit) ? limit : null });
+    await log('collection_started', { message: `Analyse ${config.rarities.join('/')} en ${config.apply ? 'étiquetage réel' : 'simulation'} : moyenne > ${config.minAverage} WB et ventes > ${config.minSales}.`, rarities: config.rarities, minAverage: config.minAverage, minSales: config.minSales, limit: Number.isFinite(limit) ? limit : null });
     await scanCollection(site, config, state, { limit, fresh, sleep: wait, signal: abort.signal });
     clearInterval(heartbeat);
     site.dispose(); site = null;

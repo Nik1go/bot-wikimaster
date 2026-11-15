@@ -1,5 +1,5 @@
 import { PauseError } from './core.mjs';
-import { RARITIES, rarityCode, normalize, frenchNumber, pageSignature } from './collection-core.mjs';
+import { rarityCode, normalize, frenchNumber, pageSignature } from './collection-core.mjs';
 
 export const CARD_SELECTOR = 'main div.cursor-pointer:has(> img[src*="/rarity/"]):has(h3)';
 const MODAL = 'div.card-frame:has(> button[aria-label="Fermer"])';
@@ -70,12 +70,12 @@ export class CollectionSite {
     await this.page.getByRole('option', { name: 'Rareté', exact: true }).click();
     const reset = this.page.getByRole('button', { name: 'Réinitialiser rareté', exact: true });
     if (await reset.isVisible()) { await reset.click(); await this.readPage(false); }
-    for (const code of ['R','PC','C']) {
+    for (const code of this.config.rarities) {
       await this.page.getByRole('button', { name: code, exact: true }).click();
       await this.readPage(false);
     }
     const selected = await this.page.getByRole('button').evaluateAll(elements => elements.filter(e => /^(L|UR|SR|R|PC|C)$/.test(e.textContent.trim()) && e.classList.contains('ring-2')).map(e => e.textContent.trim()));
-    if (selected.toSorted().join(',') !== 'C,PC,R') throw new PauseError('rarity_filter_invalid', 'Les filtres C, PC et R ne sont pas tous actifs.');
+    if (selected.toSorted().join(',') !== this.config.rarities.toSorted().join(',')) throw new PauseError('rarity_filter_invalid', `Les filtres attendus (${this.config.rarities.join(',')}) ne sont pas tous actifs.`);
     // Reloading starts at page one on the observed site; refuse an unexpected
     // saved page rather than silently skipping the beginning of the collection.
     const first = await this.readPage();
@@ -85,9 +85,9 @@ export class CollectionSite {
     return this.until(async () => {
       if (await this.page.getByText('Chargement…', { exact: true }).first().isVisible()) return null;
       const pager = this.page.getByRole('button', { name: /^Page\s+\d+\s*\/\s*\d+$/ }).first();
-      if (!(await pager.isVisible())) return null;
-      const match = (await pager.innerText()).match(/^Page\s+(\d+)\s*\/\s*(\d+)$/);
-      if (!match) return null;
+      const paginated = await pager.isVisible();
+      const match = paginated ? (await pager.innerText()).match(/^Page\s+(\d+)\s*\/\s*(\d+)$/) : null;
+      if (paginated && !match) return null;
       const cards = await this.page.locator(CARD_SELECTOR).evaluateAll(elements => elements.map(e => ({
         title: e.querySelector('h3')?.textContent.trim(),
         rarity: [...e.children].find(n => /^(C|PC|R|SR|UR|L)$/.test(n.textContent.trim()))?.textContent.trim(),
@@ -98,8 +98,9 @@ export class CollectionSite {
         const empty = /aucune carte/i.test(await this.page.locator('main').innerText());
         if (!empty) return null;
       }
-      if (enforceRarity && cards.some(c => !RARITIES[c.rarity])) throw new PauseError('rarity_filter_invalid', 'Une carte hors C/PC/R est présente dans le parcours.');
-      const number = Number(match[1]), totalPages = Number(match[2]);
+      if (enforceRarity && cards.some(c => !this.config.rarities.includes(c.rarity))) throw new PauseError('rarity_filter_invalid', `Une carte hors du ciblage ${this.config.rarities.join(',')} est présente dans le parcours.`);
+      // The site omits pagination when a rarity filter fits on one page.
+      const number = match ? Number(match[1]) : 1, totalPages = match ? Number(match[2]) : 1;
       if (number < 1 || totalPages < number) throw new PauseError('pagination_invalid', 'Pagination incohérente.');
       return { number, totalPages, cards };
     }, 'collection_loading_timeout', 'Collection bloquée : chargement, pagination ou structure de carte inattendue.');

@@ -1,4 +1,4 @@
-# Bot de tri de collection C / PC / R
+# Bot de tri de collection (C / PC / R par défaut)
 
 Ce bot ouvre les cartes une à une dans la collection, puis la vue « Marché ».
 Il ajoute l’étiquette **à vendre** uniquement si la **moyenne affichée est > 50 WB**
@@ -10,7 +10,7 @@ pas une mesure de ventes par jour ni une garantie de revente rapide. Le site
 affichait par exemple 200 ventes sur une carte lors de la vérification du
 14 novembre 2026 ; ce chiffre décrit l’historique chargé par le site.
 
-Il filtre C, PC et R, force le tri Rareté, parcourt chaque page et chaque
+Par défaut, il filtre C, PC et R, force le tri Rareté, parcourt chaque page et chaque
 exemplaire, y compris les doublons. Dans le marché, il active la rareté détenue,
 relit la sélection après chaque clic et désactive seulement les autres raretés
 encore sélectionnées, puis vérifie la sélection et l’en-tête des ventes
@@ -115,6 +115,7 @@ PACK_OPENING_ENABLED=false
 COLLECTION_APPLY=true
 COLLECTION_MIN_AVERAGE=50
 COLLECTION_MIN_SALES=80
+COLLECTION_RARITIES=C,PC,R
 COLLECTION_DELAY_SECONDS=3
 COLLECTION_TIMEOUT_SECONDS=30
 ```
@@ -135,6 +136,29 @@ défausses peuvent changer l’ordre des cartes et imposer un nouveau parcours.
 auxquelles s’ajoutent les chargements et l’étiquetage.
 
 ## Lire les logs et diagnostiquer un blocage
+
+Les réglages suivants se modifient dans `.env` sur le VPS :
+
+| Variable | Exemple | Effet |
+| --- | --- | --- |
+| `COLLECTION_MIN_AVERAGE` | `50` | Moyenne du bon marché strictement supérieure à 50 WB |
+| `COLLECTION_MIN_SALES` | `80` | Nombre de ventes strictement supérieur à 80 |
+| `COLLECTION_RARITIES` | `C,PC,R` | Raretés à parcourir, séparées par des virgules |
+| `COLLECTION_APPLY` | `false` | Simulation ; `true` active l’ajout d’étiquettes |
+| `COLLECTION_DELAY_SECONDS` | `3` | Pause entre deux cartes |
+| `COLLECTION_TIMEOUT_SECONDS` | `30` | Délai maximal d’attente d’une étape |
+
+Codes acceptés : `C` (Commun), `PC` (Peu commun), `R` (Rare), `SR` (Super Rare),
+`UR` (Ultra Rare), `L` (Légendaire). Par exemple `COLLECTION_RARITIES=R` cible
+seulement les Rares, et `COLLECTION_RARITIES=R,SR` cible Rares et Super Rares.
+Si la variable est absente d’un ancien `.env`, `C,PC,R` reste le défaut.
+
+Après un changement de prix, de nombre de ventes ou de raretés, arrête le service,
+puis utilise `collection-scan --apply --fresh` pour refaire un parcours avec les
+nouveaux critères. Les étiquettes déjà ajoutées restent présentes. Pour un test,
+utilise `collection-scan --dry-run --fresh --limit 10`. Les commandes lancées avec
+`docker compose run` lisent le `.env` actualisé. La mise à jour du bot conserve
+une progression C/PC/R existante si ces trois critères restent identiques.
 
 Exemples de lignes de console :
 

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { PauseError } from './core.mjs';
 
-export const RARITIES = { C: 'Commun', PC: 'Peu commun', R: 'Rare' };
+export const RARITIES = Object.freeze({ C: 'Commun', PC: 'Peu commun', R: 'Rare', SR: 'Super Rare', UR: 'Ultra Rare', L: 'Légendaire' });
+export const DEFAULT_RARITIES = Object.freeze(['C','PC','R']);
 export function normalize(value) {
   return String(value).normalize('NFC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('fr');
 }
@@ -24,8 +25,13 @@ export function readCollectionConfig(env = process.env) {
     return n;
   };
   if (!['true','false'].includes(env.COLLECTION_APPLY ?? 'false')) throw new Error('COLLECTION_APPLY : true ou false requis.');
+  const rarities = (env.COLLECTION_RARITIES ?? DEFAULT_RARITIES.join(',')).split(',').map(value => value.trim().toUpperCase());
+  if (rarities.some(code => !Object.hasOwn(RARITIES, code)) || new Set(rarities).size !== rarities.length) {
+    throw new Error('COLLECTION_RARITIES : codes distincts séparés par des virgules parmi C,PC,R,SR,UR,L (exemple : C,PC,R).');
+  }
   return Object.freeze({
     apply: env.COLLECTION_APPLY === 'true', label: 'à vendre',
+    rarities: Object.freeze(rarities.toSorted()),
     minAverage: number('COLLECTION_MIN_AVERAGE', 50, 0, 1e9),
     minSales: number('COLLECTION_MIN_SALES', 80, 0, 1e6, true),
     delayMs: number('COLLECTION_DELAY_SECONDS', 3, 1, 300) * 1000,
@@ -33,7 +39,7 @@ export function readCollectionConfig(env = process.env) {
   });
 }
 export function decision(card, market, config) {
-  if (!RARITIES[card.rarity]) throw new PauseError('rarity_out_of_scope', 'Seules les cartes C, PC et R peuvent être étiquetées.');
+  if (!config.rarities.includes(card.rarity)) throw new PauseError('rarity_out_of_scope', `La rareté ${card.rarity} ne fait pas partie du ciblage ${config.rarities.join(',')}.`);
   if (market.rarity !== card.rarity) throw new PauseError('market_rarity_mismatch', `Carte ${card.rarity}, marché ${market.rarity ?? 'inconnu'} : étiquetage arrêté.`);
   if (!Number.isSafeInteger(market.sales) || market.sales < 0 || (market.sales > 0 && (!Number.isFinite(market.average) || market.average < 0))) {
     throw new PauseError('market_stats_invalid', 'Statistiques du marché incomplètes.');
@@ -48,13 +54,22 @@ export function pageSignature(cards) {
   return createHash('sha256').update(JSON.stringify(cards.map(({title,rarity,stats}) => ({title,rarity,stats})))).digest('hex');
 }
 export function policySignature(config) {
-  return JSON.stringify({ version: 1, apply: config.apply, label: config.label, minAverage: config.minAverage, minSales: config.minSales });
+  return JSON.stringify({ version: 1, apply: config.apply, label: config.label, minAverage: config.minAverage, minSales: config.minSales, rarities: config.rarities.toSorted() });
 }
 
 export async function scanCollection(site, config, store, { limit = Infinity, fresh = false, sleep, signal } = {}) {
   const policy = policySignature(config);
   let progress = fresh ? null : await store.get('progress');
-  if (progress && progress.policy !== policy) throw new PauseError('scan_policy_changed', 'Les seuils ou le mode ont changé. Relancer avec --fresh pour refaire le parcours.');
+  if (progress && progress.policy !== policy) {
+    let previous;
+    try { previous = JSON.parse(progress.policy); } catch {}
+    // Upgrade older C/PC/R checkpoints without resetting a paused VPS scan.
+    const expected = JSON.parse(policy);
+    if (previous && previous.rarities == null) previous.rarities = DEFAULT_RARITIES;
+    const same = previous && Object.entries(expected).every(([key,value]) => JSON.stringify(key === 'rarities' && Array.isArray(previous[key]) ? previous[key].toSorted() : previous[key]) === JSON.stringify(value));
+    if (!same) throw new PauseError('scan_policy_changed', 'Les seuils, les raretés ou le mode ont changé. Relancer avec --fresh pour refaire le parcours.');
+    progress.policy = policy;
+  }
   if (progress?.complete) {
     await store.log('collection_complete', { message: 'Parcours déjà terminé. --fresh démarre une nouvelle analyse.', totals: progress.totals });
     return progress;
@@ -117,6 +132,6 @@ export async function scanCollection(site, config, store, { limit = Infinity, fr
   progress.finishedAt = new Date().toISOString();
   await store.put('progress', progress);
   await store.remove('current');
-  await store.log('collection_complete', { message: 'Toutes les cartes C, PC et R ont été vérifiées.', totals: progress.totals });
+  await store.log('collection_complete', { message: `Toutes les cartes ciblées (${config.rarities.join(',')}) ont été vérifiées.`, totals: progress.totals });
   return progress;
 }

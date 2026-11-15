@@ -37,7 +37,7 @@ test('seuils stricts, rareté contrôlée et nombres français', () => {
   for (const bad of ['—','NaN','50 WB','1.234,50','']) assert.throws(() => frenchNumber(bad));
   assert.equal(rarityCode('Peu commun'),'PC');
   assert.equal(rarityCode('Rare'),'R');
-  assert.equal(rarityCode('Ultra Rare'),null);
+  assert.equal(rarityCode('Ultra Rare'),'UR');
   assert.equal(decision(card(),{rarity:'R',sales:81,average:51},config).eligible,true);
   assert.equal(decision(card(),{rarity:'R',sales:200,average:50},config).eligible,false);
   assert.equal(decision(card(),{rarity:'R',sales:80,average:500},config).eligible,false);
@@ -52,6 +52,15 @@ test('configuration et arguments invalides refusés avant navigateur', () => {
   assert.throws(()=>collectionArguments('collection-scan',['--limit','0'],{}));
   assert.throws(()=>collectionArguments('collection-run',['--limit','1'],{}));
   assert.throws(()=>collectionArguments('collection-scan',['--aply'],{}));
+});
+test('raretés configurables dans env, validation et ciblage effectif', () => {
+  assert.deepEqual(readCollectionConfig({}).rarities,['C','PC','R']);
+  const custom=readCollectionConfig({COLLECTION_MIN_AVERAGE:'120',COLLECTION_MIN_SALES:'100',COLLECTION_RARITIES:' r, ur, L '});
+  assert.deepEqual(custom.rarities,['L','R','UR']);
+  assert.equal(custom.minAverage,120); assert.equal(custom.minSales,100);
+  for (const value of ['', 'R,', 'R,R', 'ZZ', 'C PC']) assert.throws(()=>readCollectionConfig({COLLECTION_RARITIES:value}));
+  assert.equal(decision(card('X','UR'),{rarity:'UR',sales:101,average:121},custom).eligible,true);
+  assert.throws(()=>decision(card('X','PC'),{rarity:'PC',sales:101,average:121},custom),{code:'rarity_out_of_scope'});
 });
 test('simulation : pagination complète et aucun étiquetage', async () => {
   const site = new Site([[card('A','PC'),card('B','C')],[card('C')]]), state = store();
@@ -94,6 +103,20 @@ test('changement de seuil refusé, étiquettes exclues de la signature de page',
   await scanCollection(site,config,state,{...options,limit:1});
   await assert.rejects(scanCollection(site,{...config,minAverage:99},state,options),{code:'scan_policy_changed'});
   assert.equal(pageSignature([card()]),pageSignature([{...card(),labels:['à vendre']} ]));
+});
+test('ancienne progression C/PC/R conservée à la mise à jour', async () => {
+  const site=new Site([[card(),card()]]), state=store();
+  await scanCollection(site,config,state,{...options,limit:1});
+  const saved=await state.get('progress');
+  const old=JSON.parse(saved.policy); delete old.rarities; saved.policy=JSON.stringify(old);
+  await state.put('progress',saved);
+  const result=await scanCollection(site,config,state,options);
+  assert.equal(result.totals.checked,2); assert.deepEqual(site.checked,['1:0','1:1']);
+});
+test('changement de rareté exige un nouveau parcours', async () => {
+  const site=new Site([[card(),card()]]), state=store();
+  await scanCollection(site,config,state,{...options,limit:1});
+  await assert.rejects(scanCollection(site,{...config,rarities:['R']},state,options),{code:'scan_policy_changed'});
 });
 test('données du mauvais marché : aucune étiquette et progression inchangée', async () => {
   const site = new Site([[card()]]), state = store();
