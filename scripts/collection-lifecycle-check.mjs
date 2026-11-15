@@ -39,10 +39,12 @@ async function stop(run,signal='SIGTERM') {
   await Promise.race([run.done,sleep(10_000).then(()=>{throw new Error('Le processus ne se ferme pas.');})]);
 }
 const control=(mode,...args)=>exec('/app/entrypoint.sh',[mode,...args],{env,timeout:15_000,maxBuffer:1024*1024});
+let phase='initial start';
 try {
   const first=start();
   await until(()=>first.stdout.includes('collection_paused'),'Le service fictif ne devient pas prêt.');
   assert.equal((await readCollectionLock(dir)).backend,'flock');
+  phase='active lock blocks maintenance';
   const original=await readFile(path.join(dir,'collection.lock'),'utf8');
   await assert.rejects(control('collection-unlock','--stopped'),error=>error.stdout.includes('collection_locked'));
   assert.equal(await readFile(path.join(dir,'collection.lock'),'utf8'),original);
@@ -53,19 +55,25 @@ try {
   await until(()=>blocked.stdout.includes('collection_locked'),'Le second service ne signale pas son attente.');
   await sleep(250); assert.equal(blocked.process.exitCode,null);
   assert.equal(blocked.stdout.includes('collection_browser'),false);
+  phase='stop waiting service';
   await stop(blocked);
   // Simulate a killed container: all its processes disappear but metadata stays.
+  phase='forced kill';
   await stop(first,'SIGKILL');
   assert.equal((await readCollectionLock(dir)).exists,true);
+  phase='restart after forced kill';
   const restarted=start();
   await until(()=>restarted.stdout.includes('collection_lock_recovered')&&restarted.stdout.includes('collection_paused'),'La reprise après arrêt brutal ne fonctionne pas.');
+  phase='graceful shutdown';
   await stop(restarted);
   assert.equal((await readCollectionLock(dir)).exists,false);
+  phase='repeated resume';
   for(let i=0;i<5;i++) {
     await control('collection-resume');
     assert.equal((await readCollectionLock(dir)).exists,false);
   }
   // Existing installations need one explicit migration of the old file lock.
+  phase='legacy lock migration';
   await writeFile(path.join(dir,'collection.lock'),JSON.stringify({pid:123,command:'collection-run'}));
   const legacy=start();
   await until(()=>legacy.stdout.includes('collection_locked'),'Le verrou historique n’est pas détecté.');
@@ -78,6 +86,11 @@ try {
   assert.deepEqual(await store.get('progress'),{position:17});
   assert.equal((await stat(path.join(dir,'collection.guard'))).isFile(),true);
   console.log('OK : cycle Docker — exclusion concurrente, statut disponible, SIGKILL puis reprise, arrêt propre, resume répété, migration ancien verrou, session/progression conservées.');
+} catch(error) {
+  // Public CI annotation contains only this isolated fictional fixture.
+  const details=JSON.stringify({phase,error:error.message,runs:processes.map(run=>({stdout:run.stdout.slice(-1800),stderr:run.stderr.slice(-1000),exitCode:run.process.exitCode,signal:run.process.signalCode}))});
+  console.error('::error title=Collection lifecycle::'+details.replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
+  throw error;
 } finally {
   for(const run of processes) { try { await stop(run); } catch { try { process.kill(-run.process.pid,'SIGKILL'); } catch {} } }
 }

@@ -14,8 +14,9 @@ case "${1:-run}" in
       echo '{"event":"collection_locked","message":"Un autre parcours ou une commande de maintenance possède le verrou Linux. Aucun navigateur lancé."}'
       if [[ "${1:-run}" != "collection-run" ]]; then exit 1; fi
       # Keep the service inspectable instead of restarting its desktop in a loop.
-      trap 'exit 0' TERM INT
-      while true; do sleep 15 & wait "$!" || true; done
+      waiting_pid=''
+      trap 'kill "${waiting_pid:-}" 2>/dev/null || true; exit 0' TERM INT
+      while true; do sleep 15 & waiting_pid=$!; wait "$waiting_pid" || true; done
     fi
     export COLLECTION_FLOCK_HELD=1
     ;;
