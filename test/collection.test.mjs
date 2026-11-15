@@ -159,3 +159,24 @@ test('pause persistante et commandes état/reprise sans navigateur', async () =>
   assert.equal(await runCollectionCommand('collection-resume',[],env),0);
   assert.equal(await state.get('paused'),null);
 });
+
+test('resume --fresh prépare un nouveau parcours sans ouvrir le navigateur ni toucher à la session', async () => {
+  const dir = await mkdtemp(path.join(process.env.TEST_TMPDIR || os.tmpdir(),'wiki-collection-fresh-'));
+  const { createState } = await import('../src/state.mjs');
+  const root = await createState(dir);
+  const apply = await createState(path.join(dir,'collection','apply'));
+  const simulation = await createState(path.join(dir,'collection','simulation'));
+  await root.put('browser-profile','manual-session');
+  const saved = { startedAt:'2026-01-01T00:00:00Z', totals:{checked:4}, complete:false };
+  await apply.put('progress',saved); await simulation.put('progress',saved);
+  await apply.put('current',{page:1,index:5}); await apply.put('paused',{code:'collection_changed'});
+  const env = {DATA_DIR:dir,COLLECTION_APPLY:'true'};
+  const runtime = {launchContext:()=>{throw new Error('Aucun navigateur attendu pour la maintenance.');}};
+  assert.equal(await runCollectionCommand('collection-resume',[],env,runtime),0);
+  assert.deepEqual(await apply.get('progress'),saved);
+  assert.equal(await runCollectionCommand('collection-resume',['--fresh'],env,runtime),0);
+  for (const key of ['progress','current','paused']) assert.equal(await apply.get(key),null);
+  assert.deepEqual(await simulation.get('progress'),saved);
+  assert.equal(await root.get('browser-profile'),'manual-session');
+  assert.equal(await runCollectionCommand('collection-resume',['--fresh'],env,runtime),0);
+});

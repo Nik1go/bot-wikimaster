@@ -14,7 +14,7 @@ export function collectionArguments(command, args, env) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--apply' && ['collection-scan','collection-run'].includes(command)) config.apply = true;
     else if (args[i] === '--dry-run' && ['collection-scan','collection-run'].includes(command)) config.apply = false;
-    else if (args[i] === '--fresh' && ['collection-scan','collection-run'].includes(command)) fresh = true;
+    else if (args[i] === '--fresh' && ['collection-scan','collection-run','collection-resume'].includes(command)) fresh = true;
     else if (args[i] === '--stopped' && command === 'collection-unlock') stopped = true;
     else if (args[i] === '--limit' && command === 'collection-scan') {
       const raw = args[++i];
@@ -51,7 +51,7 @@ export async function runCollectionCommand(command, args = [], env = process.env
     for (const line of events.split('\n').filter(Boolean)) {
       let event;
       try { event = JSON.parse(line); } catch { continue; }
-      if (event.event === 'collection_result' && event.at >= (progress?.startedAt ?? '') && event.eligible) latest.set(`${event.page}:${event.index}`, event);
+      if (progress && event.event === 'collection_result' && event.at >= progress.startedAt && event.eligible) latest.set(`${event.page}:${event.index}`, event);
     }
     console.log(JSON.stringify({ mode: config.apply ? 'apply' : 'simulation', totals: progress?.totals ?? null, complete: progress?.complete ?? false, candidates: [...latest.values()] }, null, 2));
     return 0;
@@ -102,8 +102,12 @@ export async function runCollectionCommand(command, args = [], env = process.env
   let step = 'initialisation';
   try {
     if (command === 'collection-resume') {
+      if (fresh) {
+        await store.remove('progress');
+        await store.remove('current');
+      }
       await store.remove('paused');
-      await log('collection_resumed', { message: 'Pause levée. Relancer collection-scan ou redémarrer le service collection.' });
+      await log('collection_resumed', { fresh, message: fresh ? 'Nouveau parcours préparé, compteurs remis à zéro. Connexion et étiquettes conservées. Redémarrer le service collection.' : 'Pause levée. Relancer collection-scan ou redémarrer le service collection.' });
       return 0;
     }
     if (command !== 'collection-login' && await store.get('paused')) {

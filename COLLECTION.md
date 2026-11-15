@@ -26,6 +26,13 @@ L’action est un **ajout d’étiquette**. Les autres étiquettes et les favori
 conservés. Aucune enchère, vente, défausse ou ouverture de paquet n’est déclenchée.
 Une carte admissible déjà étiquetée est laissée telle quelle.
 
+Après un ajout, le bot attend la fin de l’enregistrement, recharge la collection,
+revient à la même page et vérifie la même carte et son étiquette. Un simple badge
+apparu à l’écran ne suffit pas. La confirmation fonctionne aussi lorsque le site
+enregistre hors d’un chemin `/api/`. En cas d’échec, aucun second clic n’est envoyé.
+`collection_label_verified` confirme cette relecture ; le journal conserve seulement
+la méthode, l’adresse sans paramètres et le statut des requêtes, sans cookies ni contenu.
+
 ## Déployer sur ton VPS existant
 
 Utilise le **dossier Compose actuel du VPS** : son nom détermine le volume où
@@ -83,30 +90,10 @@ Une vérification humaine se traite dans ce navigateur. Si le site refuse la
 connexion, le bot enregistre le refus et s’arrête ; il ne tente pas de le contourner.
 N’utilise jamais `docker compose down -v` pour une mise à jour : cela supprime le volume.
 
-## Tester puis lancer un parcours complet
+## Lancer la production après validation locale
 
-Premier essai : 10 cartes en simulation, sans ajouter d’étiquette :
-
-```bash
-sudo docker compose run --rm wiki-bot collection-scan --dry-run --limit 10
-sudo docker compose run --rm -e COLLECTION_APPLY=false wiki-bot collection-report
-```
-
-Puis 10 cartes avec étiquetage réel :
-
-```bash
-sudo docker compose run --rm wiki-bot collection-scan --apply --limit 10
-sudo docker compose run --rm -e COLLECTION_APPLY=true wiki-bot collection-report
-```
-
-Les progressions simulation/étiquetage sont séparées. Pour poursuivre l’étiquetage
-dans le terminal, reprends sans limite :
-
-```bash
-sudo docker compose run --rm wiki-bot collection-scan --apply
-```
-
-Pour le laisser tourner après fermeture du terminal, ouvre `.env` sur le VPS :
+Les tests se font en local, selon les sections ci-dessous. Le VPS exécute ensuite
+le parcours de production. Ouvre `.env` sur le VPS :
 
 ```bash
 nano .env
@@ -131,8 +118,8 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml up -d --build wik
 sudo docker compose -f compose.yaml -f compose.collection.yaml logs -f --tail=50 wiki-collection
 ```
 
-Ctrl+C quitte l’affichage des logs ; le service reste actif. Il reprend la
-progression d’étiquetage du test de 10 cartes. Une fois le parcours terminé,
+Ctrl+C quitte l’affichage des logs ; le service reste actif. Il conserve la
+progression d’un passage précédent. Une fois le parcours terminé,
 il ferme le navigateur et reste en veille. Il ne recommence pas automatiquement.
 Évite de modifier la collection pendant le parcours : ouvertures, ventes et
 défausses peuvent changer l’ordre des cartes et imposer un nouveau parcours.
@@ -158,9 +145,10 @@ seulement les Rares, et `COLLECTION_RARITIES=R,SR` cible Rares et Super Rares.
 Si la variable est absente d’un ancien `.env`, `C,PC,R` reste le défaut.
 
 Après un changement de prix, de nombre de ventes ou de raretés, arrête le service,
-puis utilise `collection-scan --apply --fresh` pour refaire un parcours avec les
-nouveaux critères. Les étiquettes déjà ajoutées restent présentes. Pour un test,
-utilise `collection-scan --dry-run --fresh --limit 10`. Les commandes lancées avec
+puis utilise `collection-resume --fresh` pour préparer un parcours avec les
+nouveaux critères, avant de recréer le service. Cette commande ne lance aucun
+navigateur et ne traite aucune carte. Les étiquettes déjà ajoutées restent présentes.
+Les commandes lancées avec
 `docker compose run` lisent le `.env` actualisé. La mise à jour du bot conserve
 une progression C/PC/R existante si ces trois critères restent identiques.
 
@@ -233,6 +221,8 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml up -d wiki-collec
 
 Une simple relance ne lève pas la pause. `collection-resume` ne démarre aucun
 parcours et ne change pas les seuils. Le service doit être arrêté pour cette commande.
+Avec `--fresh`, elle efface uniquement la progression, la position et la pause du
+mode sélectionné dans `.env`, pour préparer un nouveau passage depuis la page 1.
 
 Après un arrêt brutal uniquement, si `collection_locked` persiste alors que tous
 les processus de ce bot sont arrêtés :
@@ -277,21 +267,15 @@ traitées sont revérifiées en avançant. Si une page a changé (`collection_ch
 ou si tu modifies les seuils (`scan_policy_changed`), recommence explicitement :
 
 ```bash
-sudo docker compose run --rm wiki-bot collection-scan --apply --fresh
+sudo docker compose -f compose.yaml -f compose.collection.yaml stop wiki-collection
+sudo docker compose -f compose.yaml -f compose.collection.yaml run --rm --no-deps wiki-collection collection-resume --fresh
+sudo docker compose -f compose.yaml -f compose.collection.yaml up -d --force-recreate wiki-collection
+sudo docker compose -f compose.yaml -f compose.collection.yaml logs -f --tail=50 wiki-collection
 ```
 
-`--fresh` recommence l’analyse et remet les compteurs du parcours à zéro. Les
-étiquettes déjà ajoutées restent présentes. Il ne peut pas distinguer deux
-exemplaires strictement identiques qui auraient été intervertis : conserve la
-collection stable pendant un passage. Pour un nouveau passage en service,
-arrête-le puis utilise `run -d` avec `--fresh` (sans `--rm`, afin de conserver les logs) :
-
-```bash
-sudo docker compose -f compose.yaml -f compose.collection.yaml run -d --name wiki-collection-fresh wiki-collection collection-run --apply --fresh
-sudo docker logs -f --tail=50 wiki-collection-fresh
-# Pour l’arrêter : sudo docker stop wiki-collection-fresh
-# Puis, après lecture des logs : sudo docker rm wiki-collection-fresh
-```
+`--fresh` remet les compteurs du parcours à zéro. Les étiquettes et la connexion
+restent présentes. Le bot ne peut pas distinguer deux exemplaires strictement
+identiques qui auraient été intervertis : conserve la collection stable pendant un passage.
 
 Ne lance qu’un seul navigateur sur ce profil : arrête les bots de marché,
 d’ouverture et les modes manuels avant le bot collection. Un profil occupé
@@ -349,16 +333,21 @@ du service après un parcours terminé sous Linux. Une fermeture volontaire ne
 retire que le gestionnaire du bot et conserve les gestionnaires internes de Playwright.
 
 Le deuxième test utilise un **site fictif sur 127.0.0.1**, avec Chromium, deux
-copies identiques, trois pages, les filtres exclusifs « Toutes / Rare / Peu commun /
+copies identiques, plusieurs pages, les filtres exclusifs « Toutes / Rare / Peu commun /
 Super Rare » et une variante à sélection multiple, des seuils à la limite,
 Sergio Gómez à 12 WB / 25 ventes, une absence de vente, un en-tête de rareté
-contradictoire et un refus HTTP 429. Aucun accès au compte n’est nécessaire.
+contradictoire et un refus HTTP 429. Il vérifie un enregistrement via `/collection`,
+via `/api/mock-label` et sur un deuxième serveur local, la relecture d’une SR sur une page ultérieure, la
+commande complète en étiquetage et le refus d’un badge optimiste non enregistré.
+Aucun accès au compte n’est nécessaire.
 
 Vérifications sur le vrai site le 14 novembre 2026 : connexion Edge déjà active,
 lecture du marché Rare de « Versatile (sexualité) » (moyenne 232 WB, 200 ventes),
 ajout puis affichage confirmé de « à vendre », et carte Commune « Trans7 » sans
-vente, laissée intacte. Le parcours automatisé complet sur le vrai site et le
-conteneur sur VPS restent à vérifier via l’essai limité ci-dessus.
+vente, laissée intacte. Le 15 novembre, une consultation locale en lecture seule
+de Broad Peak [SR] a confirmé que son étiquette était bien enregistrée malgré
+l’ancienne pause de confirmation. Les nouvelles écritures sont validées sur le
+site fictif local ; aucun test d’écriture supplémentaire n’a été effectué sur le compte réel.
 
 Références techniques : [sélecteurs Playwright](https://playwright.dev/docs/api/class-locator)
 et [services/profils Docker Compose](https://docs.docker.com/reference/compose-file/services/#profiles).

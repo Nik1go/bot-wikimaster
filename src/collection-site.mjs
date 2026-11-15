@@ -10,9 +10,33 @@ export class CollectionSite {
     this.fatal = null;
     this.writes = 0;
     this.reads = new Set();
+    this.labelOperation = null;
     page.setDefaultTimeout(config.timeoutMs);
+    this.onRequest = request => {
+      const operation = this.labelOperation;
+      if (!operation || !['POST','PATCH','PUT','DELETE'].includes(request.method())) return;
+      const url = new URL(request.url());
+      operation.requests.set(request, { method: request.method(), endpoint: `${url.host}${url.pathname}`, status: null, pending: true });
+      operation.lastActivity = Date.now();
+    };
+    this.onRequestFinished = request => {
+      const operation = this.labelOperation;
+      const record = operation?.requests.get(request);
+      if (record) { record.pending = false; operation.lastActivity = Date.now(); }
+    };
+    page.on('request', this.onRequest);
+    page.on('requestfinished', this.onRequestFinished);
     this.onResponse = response => {
       const url = new URL(response.url());
+      const operation = this.labelOperation;
+      const record = operation?.requests.get(response.request());
+      if (record) {
+        record.status = response.status();
+        if (record.status >= 400) {
+          const code = record.status === 401 ? 'login_required' : record.status === 403 ? 'access_denied' : record.status === 429 ? 'rate_limited' : 'site_request_failed';
+          operation.failure = new PauseError(code, `Ajout d’étiquette refusé : HTTP ${record.status} sur ${record.endpoint}.`);
+        }
+      }
       if (url.origin !== this.baseUrl || !url.pathname.startsWith('/api/')) return;
       const job = (async () => {
         const status = response.status();
@@ -32,17 +56,27 @@ export class CollectionSite {
     this.onRequestFailed = request => {
       const url = new URL(request.url());
       const reason = request.failure()?.errorText || 'erreur réseau';
+      const operation = this.labelOperation;
+      const record = operation?.requests.get(request);
+      if (record) {
+        record.pending = false; record.error = reason; operation.lastActivity = Date.now();
+        operation.failure = new PauseError('network_error', `Enregistrement de l’étiquette interrompu sur ${record.endpoint}.`);
+      }
       if (url.origin === this.baseUrl && url.pathname.startsWith('/api/') && !/ABORTED|CANCELLED/i.test(reason)) {
         this.fatal = new PauseError('network_error', `Requête interrompue sur ${url.pathname} : ${reason}.`);
       }
     };
     page.on('requestfailed', this.onRequestFailed);
   }
-  dispose() { this.page.off('response', this.onResponse); this.page.off('requestfailed', this.onRequestFailed); }
+  dispose() {
+    this.page.off('request', this.onRequest); this.page.off('requestfinished', this.onRequestFinished);
+    this.page.off('response', this.onResponse); this.page.off('requestfailed', this.onRequestFailed);
+  }
   modal() { return this.page.locator(MODAL); }
   async healthy() {
     await Promise.all([...this.reads]);
     if (this.fatal) throw this.fatal;
+    if (this.labelOperation?.failure) throw this.labelOperation.failure;
     const url = new URL(this.page.url());
     if (url.origin !== this.baseUrl) throw new PauseError('unexpected_navigation', 'Le navigateur a quitté WikiMasters.');
     if (/\/(login|signup|forgot-password)(\/|$)/.test(url.pathname)) throw new PauseError('login_required', 'Session absente ou expirée : se connecter avec collection-login.');
@@ -106,8 +140,9 @@ export class CollectionSite {
     }, 'collection_loading_timeout', 'Collection bloquée : chargement, pagination ou structure de carte inattendue.');
   }
   async openCard(index, card, signature) {
-    if (pageSignature((await this.readPage()).cards) !== signature) throw new PauseError('collection_changed', 'L’ordre des cartes a changé pendant le parcours. Repartir avec --fresh.');
-    this.active = { index, card, signature };
+    const current = await this.readPage();
+    if (pageSignature(current.cards) !== signature) throw new PauseError('collection_changed', 'L’ordre des cartes a changé pendant le parcours. Repartir avec --fresh.');
+    this.active = { index, card, signature, pageNumber: current.number };
     await this.page.locator(CARD_SELECTOR).nth(index).getByRole('heading', { level: 3 }).click();
     await this.until(async () => await this.modal().isVisible(), 'card_open_timeout', 'Le détail de la carte ne s’ouvre pas.');
     await this.assertCard(card);
@@ -193,19 +228,37 @@ export class CollectionSite {
     await options.waitFor({ state: 'visible' });
     const existing = options.getByRole('button', { name: label, exact: true });
     const create = options.getByRole('button', { name: `Créer ${label}`, exact: true });
-    const before = this.writes;
-    if (await existing.isVisible()) await existing.click();
-    else if (await create.isVisible()) await create.click();
-    else throw new PauseError('label_option_missing', 'L’étiquette ne peut pas être sélectionnée ou créée.');
-    await this.until(async () => this.writes > before && await exists(), 'label_unconfirmed', 'Étiquette non confirmée par le serveur. Aucun nouveau clic automatique ; la reprise vérifiera sa présence.');
-    // Re-open the same physical slot to verify the saved detail, without ever
-    // clicking a toggle or removing existing labels.
     const active = this.active;
-    await this.closeCard();
+    const operation = { requests: new Map(), lastActivity: Date.now(), failure: null };
+    const summary = () => [...operation.requests.values()].map(({method,endpoint,status,pending}) => ({method,endpoint,status,pending}));
+    this.labelOperation = operation;
+    try {
+      if (await existing.isVisible()) await existing.click();
+      else if (await create.isVisible()) await create.click();
+      else throw new PauseError('label_option_missing', 'L’étiquette ne peut pas être sélectionnée ou créée.');
+      // Observe the normal UI save, including server actions and cross-origin
+      // backends. Never require a particular /api/ path or export credentials.
+      await this.until(async () => await exists() && ![...operation.requests.values()].some(r => r.pending) && Date.now() - operation.lastActivity >= 1000,
+        'label_unconfirmed', () => `Ajout d’étiquette non confirmé à l’écran. Requêtes observées : ${JSON.stringify(summary())}. Aucun second clic automatique.`);
+    } finally { this.labelOperation = null; }
+    // A UI badge can be optimistic. A full navigation fetches the collection
+    // again; verify the same page/slot/rarity before accepting the stored label.
+    await this.prepare();
+    await this.goToPage(active.pageNumber);
     await this.openCard(active.index, card, active.signature);
-    if (!(await exists())) throw new PauseError('label_unconfirmed', 'L’étiquette n’est plus visible après réouverture du détail.');
+    if (!(await exists())) throw new PauseError('label_unconfirmed', `Étiquette absente après rechargement de ${card.title} [${card.rarity}]. Requêtes : ${JSON.stringify(summary())}. Aucun second clic automatique.`);
     await this.healthy();
+    await this.log('collection_label_verified', { title: card.title, rarity: card.rarity, confirmation: 'reloaded_collection', requests: summary(), message: `${card.title} [${card.rarity}] : étiquette relue après rechargement de la collection.` });
     return 'tagged';
+  }
+  async goToPage(number) {
+    const current = await this.readPage();
+    if (current.number === number) return;
+    if (number < 1 || number > current.totalPages) throw new PauseError('collection_changed', 'Le nombre de pages a changé pendant la vérification de l’étiquette.');
+    await this.page.getByRole('button', { name: /^Page\s+\d+\s*\/\s*\d+$/ }).first().click();
+    const input = this.page.getByRole('spinbutton', { name: 'Aller à la page', exact: true });
+    await input.fill(String(number)); await input.press('Enter');
+    await this.until(async () => (await this.readPage()).number === number, 'pagination_timeout', `Impossible de revenir à la page ${number} pour vérifier l’étiquette.`);
   }
   async closeCard() {
     await this.modal().getByRole('button', { name: 'Fermer', exact: true }).click();
