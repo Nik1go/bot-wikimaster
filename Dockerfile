@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/playwright:v1.64.0-noble
 
 USER root
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11-utils x11vnc novnc websockify openbox \
+    && apt-get install -y --no-install-recommends xvfb x11-utils x11vnc novnc websockify openbox util-linux \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./

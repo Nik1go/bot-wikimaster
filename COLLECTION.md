@@ -54,6 +54,10 @@ connexion sont conservés. Si Git signale une divergence ou des modifications
 locales, examine-les avant de continuer, sans forcer leur écrasement.
 Docker et Compose v2 doivent déjà être installés.
 
+Les services `wiki-bot` et `wiki-collection` utilisent maintenant la même image
+locale `wiki-masters-bot:local` et le même volume de connexion. Reconstruire
+`wiki-bot` met donc aussi à jour le code exécuté par `wiki-collection`.
+
 ## Se connecter à ton compte
 
 Si le bot existant possède encore une session valide dans son volume, cette
@@ -237,6 +241,35 @@ les processus de ce bot sont arrêtés :
 sudo docker compose run --rm wiki-bot collection-unlock --stopped
 ```
 
+Sur Docker Linux, le bot possède désormais un verrou système `flock`, libéré
+automatiquement quand le conteneur s’arrête, même brutalement. Une ancienne
+métadonnée de ce nouveau verrou est récupérée seulement après acquisition du
+verrou système. Un ancien verrou de la version précédente reste protégé jusqu’au
+déverrouillage explicite. Le fichier `collection.guard` reste présent : sa
+présence ne signifie pas que le bot est actif et il ne faut pas le supprimer.
+
+Pour migrer une installation restée en boucle `collection_locked`, exécute dans
+le dossier existant, en laissant chaque commande se terminer :
+
+```bash
+sudo docker compose -f compose.yaml -f compose.collection.yaml stop wiki-bot wiki-collection
+git pull --ff-only origin main
+sudo docker compose -f compose.yaml -f compose.collection.yaml build wiki-collection
+sudo docker compose -f compose.yaml -f compose.collection.yaml run --rm --no-deps wiki-collection collection-unlock --stopped
+sudo docker compose -f compose.yaml -f compose.collection.yaml run --rm --no-deps wiki-collection collection-resume
+sudo docker compose -f compose.yaml -f compose.collection.yaml up -d --force-recreate wiki-collection
+sudo docker compose -f compose.yaml -f compose.collection.yaml logs --tail=100 wiki-collection
+```
+
+Arrête aussi tout ancien conteneur de test ou de connexion qui utiliserait ce
+même volume. Le déverrouillage affiche le chemin exact et indique si un fichier
+a été retiré ou s’il était déjà absent. `collection-status` affiche le propriétaire
+enregistré du verrou (commande, conteneur, date), sans cookie ou jeton.
+Un service qui rencontre un verrou occupé reste en attente, consultable, sans
+redémarrer son bureau en boucle. Arrête-le avant les commandes de maintenance.
+La connexion et la progression restent conservées ; `--fresh` n’est pas nécessaire
+pour réparer uniquement le démarrage.
+
 L’interface n’expose pas d’identifiant unique d’exemplaire dans les cartes du
 tableau. La reprise s’appuie donc sur l’ordre, les titres, les raretés et les
 statistiques ATK/DEF de chaque page, pas seulement sur le nom. Les pages déjà
@@ -303,6 +336,11 @@ laisse cette variable vide pour utiliser Chromium fourni par l’image.
 npm test
 npm run test:collection:browser
 ```
+
+La CI vérifie aussi le cycle Docker réel sur un volume temporaire : deux
+parcours concurrents, refus de déverrouiller un parcours actif, `SIGKILL` suivi
+d’une reprise, arrêt propre, commandes `resume` répétées et migration de l’ancien
+verrou. Ce test n’utilise aucun compte et ne contacte pas WikiMasters.
 
 Le deuxième test utilise un **site fictif sur 127.0.0.1**, avec Chromium, deux
 copies identiques, trois pages, les filtres exclusifs « Toutes / Rare / Peu commun /

@@ -30,7 +30,10 @@ jobs:
       - run: bash -n docker/entrypoint.sh
       - run: docker compose config --quiet
       - run: docker compose -f compose.yaml -f compose.collection.yaml config --quiet
+      - run: node scripts/check-compose.mjs
       - run: docker compose build
+      - name: Collection lock lifecycle without an account
+        run: docker compose run --rm --entrypoint node wiki-bot scripts/collection-lifecycle-check.mjs
       - name: Offline comparison without a desktop
         run: docker compose run --rm -e DISPLAY=invalid wiki-bot market-compare --demo
       - run: docker compose run --rm wiki-bot smoke

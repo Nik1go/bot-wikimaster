@@ -1,10 +1,11 @@
-import { mkdir, open, unlink, readFile, appendFile } from 'node:fs/promises';
+import { mkdir, readFile, appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { PauseError, resolveBrowserProfile } from './core.mjs';
 import { createState } from './state.mjs';
 import { readCollectionConfig, scanCollection } from './collection-core.mjs';
 import { CollectionSite } from './collection-site.mjs';
+import { acquireCollectionLock, clearCollectionLock, readCollectionLock } from './collection-lock.mjs';
 
 export const COLLECTION_COMMANDS = ['collection-login','collection-scan','collection-run','collection-status','collection-report','collection-resume','collection-unlock'];
 export function collectionArguments(command, args, env) {
@@ -39,7 +40,7 @@ export async function runCollectionCommand(command, args = [], env = process.env
   };
   const state = { ...store, log };
   if (command === 'collection-status') {
-    console.log(JSON.stringify({ ...config, stateDir: store.dir, browserProfile: resolveBrowserProfile(await root.get('browser-profile')), paused: await store.get('paused'), current: await store.get('current'), progress: await store.get('progress') }, null, 2));
+    console.log(JSON.stringify({ ...config, stateDir: store.dir, lock: await readCollectionLock(dataDir), browserProfile: resolveBrowserProfile(await root.get('browser-profile')), paused: await store.get('paused'), current: await store.get('current'), progress: await store.get('progress') }, null, 2));
     return 0;
   }
   if (command === 'collection-report') {
@@ -55,17 +56,25 @@ export async function runCollectionCommand(command, args = [], env = process.env
     console.log(JSON.stringify({ mode: config.apply ? 'apply' : 'simulation', totals: progress?.totals ?? null, complete: progress?.complete ?? false, candidates: [...latest.values()] }, null, 2));
     return 0;
   }
-  const lockPath = path.join(dataDir, 'collection.lock');
   if (command === 'collection-unlock') {
     if (!stopped) throw new PauseError('confirmation_required', 'Arrêter toutes les commandes collection, puis utiliser collection-unlock --stopped.');
-    await unlink(lockPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    await log('collection_unlocked', { message: 'Ancien verrou retiré après arrêt des processus.' });
+    const { removed, previous } = await clearCollectionLock(dataDir);
+    await log('collection_unlocked', { removed, previous, message: removed ? `Verrou retiré : ${previous.path}. Connexion et progression conservées.` : `Aucun verrou présent dans ${previous.path}.` });
     return 0;
   }
   let lock;
-  try { lock = await open(lockPath, 'wx', 0o600); }
+  try { lock = await acquireCollectionLock(dataDir, { command, flockHeld: env.COLLECTION_FLOCK_HELD === '1', log }); }
   catch (error) {
-    if (error.code === 'EEXIST') throw new PauseError('collection_locked', 'Un parcours/une connexion est actif, ou un arrêt brutal a laissé un verrou. Arrêter les processus avant collection-unlock --stopped.');
+    if (error.code === 'collection_locked' && command === 'collection-run') {
+      await log('collection_locked', { message: `${error.message} Service en attente, sans nouvel essai ni navigateur.` });
+      const waiting = new AbortController();
+      const finish = () => waiting.abort();
+      process.once('SIGINT', finish); process.once('SIGTERM', finish);
+      try { while (!waiting.signal.aborted) await sleep(15_000, undefined, { signal: waiting.signal }); }
+      catch (stopped) { if (stopped.name !== 'AbortError') throw stopped; }
+      finally { process.off('SIGINT', finish); process.off('SIGTERM', finish); }
+      return 0;
+    }
     throw error;
   }
   let context, page, site, heartbeat;
@@ -76,7 +85,6 @@ export async function runCollectionCommand(command, args = [], env = process.env
   process.once('SIGTERM', stop);
   let step = 'initialisation';
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, at: new Date().toISOString(), command }));
     if (command === 'collection-resume') {
       await store.remove('paused');
       await log('collection_resumed', { message: 'Pause levée. Relancer collection-scan ou redémarrer le service collection.' });
@@ -155,7 +163,6 @@ export async function runCollectionCommand(command, args = [], env = process.env
     process.off('SIGINT', stop); process.off('SIGTERM', stop);
     site?.dispose();
     await context?.close().catch(() => {});
-    await lock.close();
-    await unlink(lockPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await lock.release();
   }
 }

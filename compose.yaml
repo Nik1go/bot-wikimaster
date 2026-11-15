@@ -1,5 +1,7 @@
 services:
   wiki-bot:
+    image: "${WIKI_BOT_IMAGE:-wiki-masters-bot:local}"
+    pull_policy: never
     build: .
     init: true
     restart: unless-stopped

@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 umask 077
 
+# A kernel lock is released even after SIGKILL/container loss. The metadata
+# file remains only for diagnosis and compatibility with older installations.
+# Never remove collection.guard: unlinking it would create a second lock inode.
+unset COLLECTION_FLOCK_HELD
+case "${1:-run}" in
+  collection-run|collection-scan|collection-login|collection-resume|collection-unlock)
+    mkdir -p "${DATA_DIR:-/data}"
+    exec 9>"${DATA_DIR:-/data}/collection.guard"
+    if ! flock -n 9; then
+      echo '{"event":"collection_locked","message":"Un autre parcours ou une commande de maintenance possède le verrou Linux. Aucun navigateur lancé."}'
+      if [[ "${1:-run}" != "collection-run" ]]; then exit 1; fi
+      # Keep the service inspectable instead of restarting its desktop in a loop.
+      trap 'exit 0' TERM INT
+      while true; do sleep 15 & wait "$!" || true; done
+    fi
+    export COLLECTION_FLOCK_HELD=1
+    ;;
+esac
+
 # Standby needs no desktop, VNC server or browser process.
 if [[ ( "${1:-run}" == "run" || "${1:-run}" == "once" ) && "${PACK_OPENING_ENABLED:-false}" != "true" ]]; then
   exec node /app/src/index.mjs "$@"
