@@ -57,7 +57,7 @@ export class CollectionSite {
       if (result) return result;
       await this.sleep(200);
     } while (Date.now() < deadline);
-    throw new PauseError(code, message);
+    throw new PauseError(code, typeof message === 'function' ? await message() : message);
   }
   async prepare() {
     const response = await this.page.goto(`${this.baseUrl}/collection`, { waitUntil: 'domcontentloaded' });
@@ -126,7 +126,13 @@ export class CollectionSite {
     const modal = this.modal();
     await this.until(async () => (await modal.locator('button[aria-pressed]').count()) || /aucune vente pour l'instant/i.test(await modal.innerText()), 'market_loading_timeout', 'Le marché ne charge pas : accès Pro, réseau ou interface à vérifier.');
     const buttons = modal.locator('button[aria-pressed]');
-    let choices = await buttons.evaluateAll(elements => elements.map(e => ({ name: e.textContent.trim(), selected: e.getAttribute('aria-pressed') === 'true' })));
+    const readChoices = () => buttons.evaluateAll(elements => elements.map(e => ({ name: e.textContent.trim(), selected: e.getAttribute('aria-pressed') === 'true' })));
+    let choices = await readChoices();
+    const selectionProblem = async () => {
+      const headings = await modal.getByRole('heading', { level: 3 }).allTextContents();
+      const selected = (await readChoices()).filter(c => c.selected).map(c => c.name);
+      return `Marché non confirmé pour ${card.title} [${card.rarity}] : sélection ${selected.join(' + ') || 'aucune'} ; en-tête ${headings.find(h => /dernières ventes/i.test(h)) || 'absent'}. Aucun étiquetage.`;
+    };
     if (!choices.length) {
       // No rarity selector is rendered when there are no sales at all.
       if (/aucune vente pour l'instant/i.test(await modal.innerText())) return { rarity: card.rarity, sales: 0, average: null };
@@ -136,13 +142,24 @@ export class CollectionSite {
     if (!target) throw new PauseError('market_rarity_missing', `Le marché ne propose pas la rareté ${card.rarity}.`);
     const targetButton = buttons.filter({ hasText: new RegExp(`^${target.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) });
     if (!target.selected) await targetButton.click();
-    // These controls are multi-select. A price combining R + PC must never
-    // qualify a PC card. Select the target before removing other rarities.
-    for (let index = 0; index < choices.length; index++) {
-      if (choices[index].selected && rarityCode(choices[index].name) !== card.rarity) await buttons.nth(index).click();
+    await this.until(async () => {
+      choices = await readChoices();
+      return choices.some(c => c.selected && rarityCode(c.name) === card.rarity);
+    }, 'market_rarity_unconfirmed', selectionProblem);
+    // The real market has exclusive filters: choosing Rare turns Toutes off.
+    // Re-read after every click so an old snapshot cannot click Toutes again.
+    // Also support a multi-select UI by removing only extras still selected.
+    for (let remaining = choices.length; ; remaining--) {
+      choices = await readChoices();
+      if (!choices.some(c => c.selected && rarityCode(c.name) === card.rarity)) throw new PauseError('market_rarity_unconfirmed', await selectionProblem());
+      const extra = choices.find(c => c.selected && rarityCode(c.name) !== card.rarity);
+      if (!extra) break;
+      if (remaining <= 0) throw new PauseError('market_rarity_unconfirmed', await selectionProblem());
+      await buttons.filter({ hasText: new RegExp(`^${extra.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).click();
+      await this.until(async () => !(await readChoices()).some(c => c.name === extra.name && c.selected), 'market_rarity_unconfirmed', selectionProblem);
     }
     await this.until(async () => {
-      choices = await buttons.evaluateAll(elements => elements.map(e => ({ name: e.textContent.trim(), selected: e.getAttribute('aria-pressed') === 'true' })));
+      choices = await readChoices();
       const selected = choices.filter(c => c.selected);
       if (selected.length !== 1 || rarityCode(selected[0].name) !== card.rarity) return false;
       if (await modal.getByText('Chargement…', { exact: true }).first().isVisible()) return false;
@@ -150,7 +167,8 @@ export class CollectionSite {
       // The last-sales heading independently proves which rarity the displayed
       // data belongs to, even while the selector updates before the response.
       return (await modal.getByRole('heading', { name: new RegExp(`10 dernières ventes\\s*·\\s*${target.name}$`, 'i') }).isVisible()) || /aucune vente pour l'instant/i.test(text);
-    }, 'market_rarity_unconfirmed', 'Impossible de confirmer que les statistiques affichées appartiennent uniquement à la rareté de la carte.');
+    }, 'market_rarity_unconfirmed', selectionProblem);
+    await this.log('collection_market_rarity', { title: card.title, rarity: card.rarity, selected: target.name, message: `${card.title} [${card.rarity}] : marché ${target.name} seul confirmé.` });
     const stats = await modal.locator('p').evaluateAll(elements => {
       const result = {};
       for (const e of elements) if (['Ventes','Moyenne'].includes(e.textContent.trim())) result[e.textContent.trim()] = e.parentElement.querySelector('p:nth-of-type(2)')?.textContent.trim();

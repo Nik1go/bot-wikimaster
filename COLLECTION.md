@@ -12,10 +12,15 @@ affichait par exemple 200 ventes sur une carte lors de la vérification du
 
 Il filtre C, PC et R, force le tri Rareté, parcourt chaque page et chaque
 exemplaire, y compris les doublons. Dans le marché, il active la rareté détenue,
-désactive les autres raretés, puis vérifie la sélection et l’en-tête des ventes
+relit la sélection après chaque clic et désactive seulement les autres raretés
+encore sélectionnées, puis vérifie la sélection et l’en-tête des ventes
 avant de lire Ventes/Moyenne. Il gère l’onglet Marché observé le 14 novembre 2026
 et le bouton accessible « Vue du marché » pour l’ouverture de cette vue.
 Une rareté impossible à confirmer provoque une pause explicite.
+
+Le marché observé utilise un filtre exclusif « Toutes / Rare / Super Rare… » :
+cliquer sur Rare désactive Toutes automatiquement. Le bot gère aussi une interface
+à sélection multiple. Il ne reclique jamais sur Toutes à partir d’un ancien état.
 
 L’action est un **ajout d’étiquette**. Les autres étiquettes et les favoris sont
 conservés. Aucune enchère, vente, défausse ou ouverture de paquet n’est déclenchée.
@@ -175,6 +180,10 @@ Les logs affichent des heures UTC. `collection-report` affiche les candidates
 du parcours courant, avec leur prix, leur rareté, leur position et leur action.
 Une moyenne manquante n’est jamais remplacée par zéro ou une autre rareté.
 
+La ligne `collection_market_rarity` confirme la rareté isolée. En cas d’échec,
+le diagnostic indique la carte, les boutons encore sélectionnés et l’en-tête
+de l’historique réellement affiché.
+
 ## Arrêter et reprendre
 
 ```bash
@@ -272,8 +281,10 @@ npm run test:collection:browser
 ```
 
 Le deuxième test utilise un **site fictif sur 127.0.0.1**, avec Chromium, deux
-copies identiques, plusieurs raretés, deux pages, une moyenne à la limite,
-une absence de vente et un refus HTTP 429. Aucun accès au compte n’est nécessaire.
+copies identiques, trois pages, les filtres exclusifs « Toutes / Rare / Peu commun /
+Super Rare » et une variante à sélection multiple, des seuils à la limite,
+Sergio Gómez à 12 WB / 25 ventes, une absence de vente, un en-tête de rareté
+contradictoire et un refus HTTP 429. Aucun accès au compte n’est nécessaire.
 
 Vérifications sur le vrai site le 14 novembre 2026 : connexion Edge déjà active,
 lecture du marché Rare de « Versatile (sexualité) » (moyenne 232 WB, 200 ventes),
