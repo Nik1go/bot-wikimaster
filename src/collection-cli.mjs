@@ -25,7 +25,7 @@ export function collectionArguments(command, args, env) {
   return { config, limit, fresh, stopped };
 }
 
-export async function runCollectionCommand(command, args = [], env = process.env) {
+export async function runCollectionCommand(command, args = [], env = process.env, runtime = {}) {
   const { config, limit, fresh, stopped } = collectionArguments(command, args, env);
   if (env.COLLECTION_BROWSER_CHANNEL && !['chrome','msedge'].includes(env.COLLECTION_BROWSER_CHANNEL)) throw new PauseError('configuration_error', 'COLLECTION_BROWSER_CHANNEL : chrome ou msedge, ou laisser vide pour Chromium.');
   const dataDir = path.resolve(env.DATA_DIR || './data');
@@ -77,9 +77,25 @@ export async function runCollectionCommand(command, args = [], env = process.env
     }
     throw error;
   }
-  let context, page, site, heartbeat;
+  let context, page, site, heartbeat, closingPromise;
   const abort = new AbortController();
-  const stop = () => { abort.abort(); context?.close().catch(() => {}); };
+  const onContextClosed = () => {
+    if (command === 'collection-login') abort.abort();
+    else if (site) site.fatal = new PauseError('browser_closed', 'Le navigateur a été fermé pendant le parcours. Progression conservée.');
+  };
+  const closeBrowser = () => {
+    if (!closingPromise && context) {
+      // Playwright itself listens for close to resolve context.close(). Remove
+      // only our callback; removeAllListeners would strand its internal promise.
+      context.off('close', onContextClosed);
+      closingPromise = context.close().then(async () => {
+        context = null;
+        await log('collection_browser_closed', { message: 'Navigateur fermé ; session conservée.' });
+      });
+    }
+    return closingPromise || Promise.resolve();
+  };
+  const stop = () => { abort.abort(); closeBrowser().catch(() => {}); };
   const wait = ms => sleep(ms, undefined, { signal: abort.signal });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -104,24 +120,24 @@ export async function runCollectionCommand(command, args = [], env = process.env
     const profile = path.resolve(dataDir, resolveBrowserProfile(await root.get('browser-profile')));
     await mkdir(profile, { recursive: true, mode: 0o700 });
     await log('collection_browser', { message: 'Ouverture du navigateur avec le profil de connexion conservé.' });
-    const { chromium } = await import('playwright');
-    context = await chromium.launchPersistentContext(profile, {
+    const launchContext = runtime.launchContext || (async (profilePath, options) => {
+      const { chromium } = await import('playwright');
+      return chromium.launchPersistentContext(profilePath, options);
+    });
+    context = await launchContext(profile, {
       ...(env.COLLECTION_BROWSER_CHANNEL ? { channel: env.COLLECTION_BROWSER_CHANNEL } : {}),
       headless: false, chromiumSandbox: true, locale: 'fr-FR', timezoneId: env.TZ || 'Europe/Paris',
       viewport: { width: 1280, height: 820 }, acceptDownloads: false,
     });
     page = context.pages()[0] || await context.newPage();
-    context.once('close', () => {
-      if (command === 'collection-login') abort.abort();
-      else if (site) site.fatal = new PauseError('browser_closed', 'Le navigateur a été fermé pendant le parcours. Progression conservée.');
-    });
+    context.once('close', onContextClosed);
     if (command === 'collection-login') {
       await page.goto('https://www.wiki-masters.com/collection', { waitUntil: 'domcontentloaded' });
       await log('collection_login', { message: 'Connecte-toi dans le navigateur affiché (noVNC sur VPS), puis arrête cette commande avec Ctrl+C. La session sera conservée.' });
       while (!abort.signal.aborted) await wait(15_000);
       return 0;
     }
-    site = new CollectionSite(page, config, { sleep: wait, log });
+    site = runtime.createSite ? runtime.createSite(page, config, { sleep: wait, log }) : new CollectionSite(page, config, { sleep: wait, log });
     step = 'scan';
     heartbeat = setInterval(() => {
       store.get('current').then(current => log('collection_heartbeat', { current, message: current ? `En cours : page ${current.page}, carte ${current.index}, ${current.title} [${current.rarity}], étape ${current.step}.` : 'Préparation du parcours en cours.' })).catch(() => {});
@@ -130,10 +146,10 @@ export async function runCollectionCommand(command, args = [], env = process.env
     await scanCollection(site, config, state, { limit, fresh, sleep: wait, signal: abort.signal });
     clearInterval(heartbeat);
     site.dispose(); site = null;
-    context.removeAllListeners('close');
-    await context.close(); context = null;
+    await closeBrowser();
     // A completed service stays idle; no automatic rescans or account actions.
     if (command === 'collection-run') {
+      await log('collection_idle', { message: 'Parcours terminé ; navigateur fermé et service en veille.' });
       while (!abort.signal.aborted) await wait(15_000);
     }
     return 0;
@@ -154,7 +170,7 @@ export async function runCollectionCommand(command, args = [], env = process.env
     // Keep a VPS service paused without a browser and without repeated requests.
     if (command === 'collection-run') {
       site?.dispose(); site = null;
-      if (context) { context.removeAllListeners('close'); await context.close().catch(() => {}); context = null; }
+      await closeBrowser().catch(() => {});
       try { while (!abort.signal.aborted) await wait(15_000); } catch (e) { if (e.name !== 'AbortError') throw e; }
     }
     return 1;
@@ -162,7 +178,7 @@ export async function runCollectionCommand(command, args = [], env = process.env
     clearInterval(heartbeat);
     process.off('SIGINT', stop); process.off('SIGTERM', stop);
     site?.dispose();
-    await context?.close().catch(() => {});
+    await closeBrowser().catch(() => {});
     await lock.release();
   }
 }

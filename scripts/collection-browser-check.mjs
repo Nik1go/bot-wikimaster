@@ -4,6 +4,12 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { CollectionSite } from '../src/collection-site.mjs';
 import { scanCollection, readCollectionConfig } from '../src/collection-core.mjs';
 
@@ -76,6 +82,39 @@ const origin=`http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({headless:true,chromiumSandbox:true,...(process.env.COLLECTION_TEST_EXECUTABLE ? {executablePath:process.env.COLLECTION_TEST_EXECUTABLE} : {})});
 const state=()=>{const data=new Map();return {get:async k=>structuredClone(data.get(k)??null),put:async(k,v)=>data.set(k,structuredClone(v)),remove:async k=>data.delete(k),log:async()=>{}};};
 try {
+  const cliDir=await mkdtemp(path.join(process.env.TEST_TMPDIR||os.tmpdir(),'collection-cli-browser-'));
+  const childFile=fileURLToPath(new URL('./collection-cli-check-child.mjs',import.meta.url));
+  const execute=promisify(execFile);
+  const runCli=(args,command='collection-scan')=>execute(process.execPath,[childFile,command,cliDir,origin,...args],{env:process.env,windowsHide:true,timeout:30_000,maxBuffer:1024*1024});
+  const firstCli=await runCli(['--dry-run','--fresh','--limit','1']);
+  assert.match(firstCli.stdout,/collection_limit/);
+  assert.doesNotMatch(firstCli.stderr,/unsettled top-level await/);
+  const nextCli=await runCli(['--dry-run','--limit','1']);
+  assert.match(nextCli.stdout,/collection_limit/);
+  assert.equal(JSON.parse(await readFile(path.join(cliDir,'collection','simulation','state','progress.json'),'utf8')).totals.checked,2);
+  await assert.rejects(stat(path.join(cliDir,'collection.lock')),{code:'ENOENT'});
+  headingMismatch=true;
+  await assert.rejects(runCli(['--dry-run','--limit','1']),error=>error.code===1&&/collection_paused/.test(error.stdout)&&/collection_browser_closed/.test(error.stdout)&&!/unsettled top-level await/.test(error.stderr));
+  assert.equal(JSON.parse(await readFile(path.join(cliDir,'collection','simulation','state','progress.json'),'utf8')).totals.checked,2);
+  await assert.rejects(stat(path.join(cliDir,'collection.lock')),{code:'ENOENT'});
+  headingMismatch=false;
+  await runCli([],'collection-resume');
+  if(process.platform==='linux') {
+    const service=spawn(process.execPath,[childFile,'collection-run',cliDir,origin],{env:process.env,stdio:['ignore','pipe','pipe']});
+    let output='',errors='';
+    service.stdout.on('data',chunk=>output+=chunk); service.stderr.on('data',chunk=>errors+=chunk);
+    const done=once(service,'close');
+    try {
+      const end=Date.now()+30_000;
+      while(!output.includes('collection_idle')&&service.exitCode===null&&Date.now()<end) await sleep(50);
+      assert.match(output,/collection_idle/,'Le service doit rester vivant après la fermeture du navigateur.');
+      assert.equal(service.exitCode,null); assert.doesNotMatch(errors,/unsettled top-level await/);
+      service.kill('SIGTERM');
+      const [code]=await Promise.race([done,sleep(10_000).then(()=>{throw new Error('Le service ne se ferme pas.');})]);
+      assert.equal(code,0); await assert.rejects(stat(path.join(cliDir,'collection.lock')),{code:'ENOENT'});
+    } finally { if(service.exitCode===null&&service.signalCode===null)service.kill('SIGKILL'); }
+  }
+  console.log('OK : commande réelle — limite 1, fermeture Chromium, sortie 0, verrou retiré, reprise à la carte suivante.');
   const page=await browser.newPage();
   page.on('pageerror',error=>console.error('Page de test :',error.message));
   const config={...readCollectionConfig({}),delayMs:0,timeoutMs:3000};

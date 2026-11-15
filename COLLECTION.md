@@ -342,6 +342,12 @@ parcours concurrents, refus de déverrouiller un parcours actif, `SIGKILL` suivi
 d’une reprise, arrêt propre, commandes `resume` répétées et migration de l’ancien
 verrou. Ce test n’utilise aucun compte et ne contacte pas WikiMasters.
 
+Le test navigateur exécute aussi la commande complète : fin après `--limit 1`,
+code de sortie 0, fermeture du navigateur, suppression du verrou et reprise à
+la carte suivante. Il vérifie la fermeture après erreur, ainsi que la veille
+du service après un parcours terminé sous Linux. Une fermeture volontaire ne
+retire que le gestionnaire du bot et conserve les gestionnaires internes de Playwright.
+
 Le deuxième test utilise un **site fictif sur 127.0.0.1**, avec Chromium, deux
 copies identiques, trois pages, les filtres exclusifs « Toutes / Rare / Peu commun /
 Super Rare » et une variante à sélection multiple, des seuils à la limite,
