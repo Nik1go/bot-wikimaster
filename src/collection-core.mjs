@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { PauseError } from './core.mjs';
+import { collectionCursor, locateCollectionCursor } from './collection-cursor.mjs';
 
 export const RARITIES = Object.freeze({ C: 'Commun', PC: 'Peu commun', R: 'Rare', SR: 'Super Rare', UR: 'Ultra Rare', L: 'Légendaire' });
 export const DEFAULT_RARITIES = Object.freeze(['C','PC','R']);
@@ -54,7 +55,7 @@ export function pageSignature(cards) {
   return createHash('sha256').update(JSON.stringify(cards.map(({title,rarity,stats}) => ({title,rarity,stats})))).digest('hex');
 }
 export function policySignature(config) {
-  return JSON.stringify({ version: 1, apply: config.apply, label: config.label, minAverage: config.minAverage, minSales: config.minSales, rarities: config.rarities.toSorted() });
+  return JSON.stringify({ version: 1, sort: 'added_desc', apply: config.apply, label: config.label, minAverage: config.minAverage, minSales: config.minSales, rarities: config.rarities.toSorted() });
 }
 
 // Card-local problems can be skipped after restoring the collection view.
@@ -78,7 +79,7 @@ export async function scanCollection(site, config, store, { limit = Infinity, fr
     const expected = JSON.parse(policy);
     if (previous && previous.rarities == null) previous.rarities = DEFAULT_RARITIES;
     const same = previous && Object.entries(expected).every(([key,value]) => JSON.stringify(key === 'rarities' && Array.isArray(previous[key]) ? previous[key].toSorted() : previous[key]) === JSON.stringify(value));
-    if (!same) throw new PauseError('scan_policy_changed', 'Les seuils, les raretés ou le mode ont changé. Relancer avec --fresh pour refaire le parcours.');
+    if (!same) throw new PauseError('scan_policy_changed', 'Les seuils, les raretés, le mode ou le tri ont changé. Utiliser collection-resume --fresh pour préparer le nouveau parcours.');
     progress.policy = policy;
   }
   if (progress?.complete) {
@@ -91,110 +92,109 @@ export async function scanCollection(site, config, store, { limit = Infinity, fr
   const changed = async (page, message) => {
     progress.approximate = true;
     progress.totals.changes++;
-    await store.log('collection_changed', { page, message: `${message} Poursuite à la position courante ; certaines cartes peuvent être manquées ou revues.` });
+    await store.log('collection_changed', { page, message: `${message} Poursuite à partir du repère disponible ; certaines cartes peuvent être manquées ou revues.` });
   };
   await store.put('progress', progress);
   await site.prepare();
-  // Resume near the last visited page instead of validating all earlier pages.
-  // This also upgrades checkpoints written before the cursor was introduced.
-  const requestedPage = progress.cursor?.page ?? Math.max(1, ...Object.keys(progress.pages).map(Number));
-  if (!Number.isSafeInteger(requestedPage) || requestedPage < 1) throw new PauseError('progress_invalid', 'Page de reprise incohérente.');
-  const first = await site.readPage();
-  let pageNumber = Math.min(requestedPage, first.totalPages);
-  if (pageNumber !== requestedPage) await changed(pageNumber, `La collection compte maintenant ${first.totalPages} pages ; reprise page ${pageNumber}.`);
-  if (pageNumber !== first.number) await site.goToPage(pageNumber);
+  let page = await site.readPage(), index=0, previous=[];
+  const checkpoint = async () => {
+    progress.cursor=collectionCursor(page,index,previous);
+    progress.pages[page.number]={signature:pageSignature(page.cards),done:index};
+    await store.put('progress',progress);
+  };
+  const locate = async cursor => {
+    await store.put('current',{page:cursor.page,index:cursor.index+1,title:cursor.next[0]?.title ?? cursor.before.at(-1)?.title,step:'locating'});
+    await store.log('collection_locating',{message:`Recherche de la carte de reprise : ${cursor.next[0]?.title ?? 'après '+(cursor.before.at(-1)?.title ?? 'le dernier repère')}.`});
+    const found=await locateCollectionCursor(site,cursor,{signal,log:store.log});
+    page=found.page; index=found.index; previous=found.previous ?? [];
+    if(found.lost || found.approximate || found.skipped || page.number!==cursor.page || index!==cursor.index) {
+      await changed(page.number, found.lost ? 'Les cartes repères ont disparu ; poursuite approximative.' : `Carte repérée page ${page.number}, position ${index+1}${found.skipped ? ` ; ${found.skipped} repères suivants absents ou déplacés` : ''}${found.approximate ? ' ; doublons ambigus' : ''}.`);
+    }
+    await store.log('collection_cursor_found',{page:page.number,index:index+1,lost:found.lost,approximate:found.approximate,message:`Reprise page ${page.number}, carte ${index+1} : ${page.cards[index]?.title ?? 'fin de page'}. ${found.lost || found.approximate ? 'Repère absent ou ambigu : reprise approximative.' : 'Les nouvelles cartes placées avant le repère sont ignorées.'}`});
+    await checkpoint();
+  };
+  if(progress.cursor?.version===2) await locate(progress.cursor);
+  else {
+    const requested=progress.cursor?.page ?? Math.max(1,...Object.keys(progress.pages).map(Number));
+    if(!Number.isSafeInteger(requested) || requested<1) throw new PauseError('progress_invalid','Page de reprise incohérente.');
+    if(requested>1) { await site.goToPage(Math.min(requested,page.totalPages)); page=await site.readPage(); }
+    index=Math.min(progress.pages[page.number]?.done ?? 0,page.cards.length);
+    if(!Number.isSafeInteger(index) || index<0) throw new PauseError('progress_invalid','Position de reprise incohérente.');
+    await checkpoint();
+  }
   let checkedThisRun = 0;
+  let announcedPage=null;
   for (;;) {
     signal?.throwIfAborted();
-    let page = await site.readPage();
-    if (page.number !== pageNumber) throw new PauseError('pagination_mismatch', 'La page affichée ne correspond pas à la progression attendue.');
-    const saved = progress.pages[pageNumber] ?? { signature: pageSignature(page.cards), done: 0 };
-    if (!Number.isSafeInteger(saved.done) || saved.done < 0) throw new PauseError('progress_invalid', 'Progression de page incohérente.');
-    const reconcile = async () => {
-      const signature = pageSignature(page.cards);
-      if (saved.signature !== signature) {
-        await changed(pageNumber, `La page ${pageNumber} a changé ; reprise à la carte ${Math.min(saved.done, page.cards.length) + 1}.`);
-        saved.signature = signature;
-        saved.done = Math.min(saved.done, page.cards.length);
-      } else if (saved.done > page.cards.length) throw new PauseError('progress_invalid', 'Progression de page incohérente.');
-    };
-    await reconcile();
-    progress.pages[pageNumber] = saved;
-    progress.cursor = { page: pageNumber };
-    await store.put('progress', progress);
-    await store.log('collection_page', { message: `Page ${pageNumber}/${page.totalPages} : ${saved.done}/${page.cards.length} cartes déjà vérifiées.`, page: pageNumber, totalPages: page.totalPages });
-    for (;;) {
-      signal?.throwIfAborted();
-      // A successful label confirmation or recovery may reload a changed grid.
-      page = await site.readPage();
-      if (page.number !== pageNumber) {
-        await changed(page.number, `La pagination a changé pendant le parcours (page ${pageNumber} vers ${page.number}).`);
-        await store.put('progress', progress);
-        break;
-      }
-      await reconcile();
-      await store.put('progress', progress);
-      if (saved.done >= page.cards.length) break;
-      if (checkedThisRun >= limit) {
-        await store.log('collection_limit', { message: `Limite de ${limit} cartes atteinte ; progression conservée.`, totals: progress.totals });
-        return progress;
-      }
-      const index = saved.done;
-      const card = page.cards[index];
-      const position = { page: pageNumber, index: index + 1, title: card.title, rarity: card.rarity };
-      await store.put('current', { ...position, step: 'opening' });
-      await store.log('collection_card', { ...position, message: `${card.title} [${card.rarity}] : ouverture du marché.` });
-      let choice, result;
-      try {
-        await site.openCard(index, card, saved.signature);
-        await store.put('current', { ...position, step: 'market' });
-        const market = await site.readMarket(card);
-        choice = decision(card, market, config);
-        result = { ...position, ...market, ...choice, action: 'skipped' };
-        if (choice.eligible) {
-          await store.put('current', { ...position, step: config.apply ? 'label' : 'simulation' });
-          result.action = config.apply ? await site.ensureLabel(card, config.label) : 'would_tag';
-        }
-        await site.closeCard();
-        const actions = { skipped: 'non étiquetée', would_tag: 'à étiqueter (simulation)', tagged: 'étiquette ajoutée', already_tagged: 'déjà étiquetée' };
-        const reasons = { no_sales: 'aucune vente', average_too_low: `moyenne ≤ ${config.minAverage} WB`, not_enough_sales: `ventes ≤ ${config.minSales}`, valuable_and_liquid: 'les deux seuils sont dépassés' };
-        await store.log('collection_result', { ...result, message: `${card.title} [${card.rarity}] : moyenne ${market.average ?? '—'} WB, ${market.sales} ventes ; ${actions[result.action]} (${reasons[choice.reason]}).` });
-      } catch (error) {
+    const current=await site.readPage();
+    if(current.number!==page.number || pageSignature(current.cards)!==pageSignature(page.cards)) {
+      await changed(current.number,'La pile de cartes a changé ; recherche du repère sauvegardé.');
+      await locate(progress.cursor);
+    } else page=current;
+    if(announcedPage!==page.number) {
+      await store.log('collection_page',{page:page.number,totalPages:page.totalPages,message:`Page ${page.number}/${page.totalPages} : reprise à la position ${index+1}/${page.cards.length}.`});
+      announcedPage=page.number;
+    }
+    if(index>=page.cards.length) {
+      if(page.number>=page.totalPages) break;
+      try { await site.nextPage(page.number+1); }
+      catch(error) {
         signal?.throwIfAborted();
-        if (!isCollectionCardError(error)) throw error;
-        const code = error instanceof PauseError ? error.code : 'ui_timeout';
-        const reason = error instanceof PauseError ? error.message : String(error.message).split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]').slice(0,200);
-        // Recover without retrying a write whose outcome may be uncertain.
-        const step = (await store.get('current'))?.step;
-        await store.put('current', { ...position, step: 'recovery', code, reason });
-        await store.log('collection_recovering', { ...position, code, reason, message: `${card.title} [${card.rarity}] : ${reason} Rechargement de la collection pour continuer.` });
-        await site.recoverCard(pageNumber);
-        await store.log('collection_card_error', { ...position, code, reason, step, message: `${card.title} [${card.rarity}] : carte à revoir (${code}) — ${reason} Passage à la suivante, aucun nouveau clic d’étiquetage.` });
-        progress.totals.errors++;
+        if(!['pagination_blocked','pagination_timeout'].includes(error.code) && error.name!=='TimeoutError') throw error;
+        await changed(page.number,'Passage à la page suivante interrompu ; rechargement de la collection.');
+        await site.recoverCard(page.number+1);
       }
-      saved.done = index + 1;
-      progress.totals.checked++;
-      if (choice?.eligible) progress.totals.eligible++;
-      if (result?.action === 'tagged') progress.totals.tagged++;
-      if (result?.action === 'already_tagged') progress.totals.alreadyTagged++;
-      progress.updatedAt = new Date().toISOString();
-      await store.put('progress', progress);
-      checkedThisRun++;
-      await sleep(config.delayMs);
+      // A page fetch can reveal buys/sales that were not visible on the old
+      // page. Locate its saved tail even when the new page number looks right.
+      await locate(progress.cursor);
+      if(index>=page.cards.length && page.number>=page.totalPages) break;
+      continue;
     }
-    if (page.number !== pageNumber) { pageNumber = page.number; continue; }
-    if (pageNumber >= page.totalPages) break;
-    try { await site.nextPage(pageNumber + 1); pageNumber++; }
-    catch (error) {
+    if (checkedThisRun >= limit) {
+      await store.log('collection_limit', { message: `Limite de ${limit} cartes atteinte ; progression conservée.`, totals: progress.totals });
+      return progress;
+    }
+    const card = page.cards[index];
+    const position = { page: page.number, index: index + 1, title: card.title, rarity: card.rarity };
+    await store.put('current', { ...position, step: 'opening' });
+    await store.log('collection_card', { ...position, message: `${card.title} [${card.rarity}] : ouverture du marché.` });
+    let choice, result;
+    try {
+      await site.openCard(index, card, pageSignature(page.cards));
+      await store.put('current', { ...position, step: 'market' });
+      const market = await site.readMarket(card);
+      choice = decision(card, market, config);
+      result = { ...position, ...market, ...choice, action: 'skipped' };
+      if (choice.eligible) {
+        await store.put('current', { ...position, step: config.apply ? 'label' : 'simulation' });
+        result.action = config.apply ? await site.ensureLabel(card, config.label) : 'would_tag';
+      }
+      await site.closeCard();
+      const actions = { skipped: 'non étiquetée', would_tag: 'à étiqueter (simulation)', tagged: 'étiquette ajoutée', already_tagged: 'déjà étiquetée' };
+      const reasons = { no_sales: 'aucune vente', average_too_low: `moyenne ≤ ${config.minAverage} WB`, not_enough_sales: `ventes ≤ ${config.minSales}`, valuable_and_liquid: 'les deux seuils sont dépassés' };
+      await store.log('collection_result', { ...result, message: `${card.title} [${card.rarity}] : moyenne ${market.average ?? '—'} WB, ${market.sales} ventes ; ${actions[result.action]} (${reasons[choice.reason]}).` });
+    } catch (error) {
       signal?.throwIfAborted();
-      if (!['pagination_blocked','pagination_timeout'].includes(error.code) && error.name !== 'TimeoutError') throw error;
-      await site.recoverCard(pageNumber + 1);
-      const landing = await site.readPage();
-      await changed(landing.number, 'Pagination modifiée ; collection rechargée.');
-      await store.put('progress', progress);
-      if (landing.number <= pageNumber && landing.number === landing.totalPages) break;
-      pageNumber = landing.number;
+      if (!isCollectionCardError(error)) throw error;
+      const code = error instanceof PauseError ? error.code : 'ui_timeout';
+      const reason = error instanceof PauseError ? error.message : String(error.message).split('\n')[0].replace(/https?:\/\/\S+/g, '[URL]').slice(0,200);
+      // Recover without retrying a write whose outcome may be uncertain.
+      const step = (await store.get('current'))?.step;
+      await store.put('current', { ...position, step: 'recovery', code, reason });
+      await store.log('collection_recovering', { ...position, code, reason, message: `${card.title} [${card.rarity}] : ${reason} Rechargement de la collection pour continuer.` });
+      await site.recoverCard(page.number);
+      await store.log('collection_card_error', { ...position, code, reason, step, message: `${card.title} [${card.rarity}] : carte à revoir (${code}) — ${reason} Passage à la suivante, aucun nouveau clic d’étiquetage.` });
+      progress.totals.errors++;
     }
+    index++;
+    progress.totals.checked++;
+    if (choice?.eligible) progress.totals.eligible++;
+    if (result?.action === 'tagged') progress.totals.tagged++;
+    if (result?.action === 'already_tagged') progress.totals.alreadyTagged++;
+    progress.updatedAt = new Date().toISOString();
+    await checkpoint();
+    checkedThisRun++;
+    await sleep(config.delayMs);
   }
   progress.complete = true;
   progress.finishedAt = new Date().toISOString();

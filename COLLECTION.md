@@ -10,7 +10,7 @@ pas une mesure de ventes par jour ni une garantie de revente rapide. Le site
 affichait par exemple 200 ventes sur une carte lors de la vérification du
 14 novembre 2026 ; ce chiffre décrit l’historique chargé par le site.
 
-Par défaut, il filtre C, PC et R, force le tri Rareté, parcourt chaque page et chaque
+Par défaut, il filtre C, PC et R, force le tri **Date d’ajout**, parcourt chaque page et chaque
 exemplaire, y compris les doublons. Dans le marché, il active la rareté détenue,
 relit la sélection après chaque clic et désactive seulement les autres raretés
 encore sélectionnées, puis vérifie la sélection et l’en-tête des ventes
@@ -28,7 +28,8 @@ conservés. Aucune enchère, vente, défausse ou ouverture de paquet n’est dé
 Une carte admissible déjà étiquetée est laissée telle quelle.
 
 Après un ajout, le bot attend la fin de l’enregistrement, recharge la collection,
-revient à la même page et vérifie la même carte et son étiquette. Un simple badge
+retrouve la carte grâce à son identité visible et ses voisines, puis vérifie son étiquette, même
+si elle a changé de page. Un simple badge
 apparu à l’écran ne suffit pas. La confirmation fonctionne aussi lorsque le site
 enregistre hors d’un chemin `/api/`. En cas d’échec, aucun second clic n’est envoyé.
 `collection_label_verified` confirme cette relecture ; le journal conserve seulement
@@ -130,10 +131,10 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml logs -f --tail=50
 Ctrl+C quitte l’affichage des logs ; le service reste actif. Il conserve la
 progression d’un passage précédent. Une fois le parcours terminé,
 il ferme le navigateur et reste en veille. Il ne recommence pas automatiquement.
-Les ajouts, ventes et défausses ne bloquent plus le parcours si les cartes changent
-de position. Le bot continue à sa position courante : quelques cartes peuvent être
-manquées ou revues, et les nouvelles cartes insérées avant cette position peuvent
-attendre un prochain passage. Les changements détectés sont signalés dans les logs.
+Les ajouts, ventes et retours d’invendus ne bloquent plus le parcours si les cartes changent
+de position. Le bot mémorise la carte attendue et ses voisines pour retrouver le passage.
+Les nouvelles cartes insérées en tête, avant le repère retrouvé, attendent un prochain
+passage. Les changements détectés sont signalés dans les logs.
 À 3 secondes de pause, 10 000 cartes représentent déjà 8 h 20 de pauses,
 auxquelles s’ajoutent les chargements et l’étiquetage.
 
@@ -166,19 +167,20 @@ une progression C/PC/R existante si ces trois critères restent identiques.
 Exemples de lignes de console :
 
 ```text
-collection_page | Page 4/190 : 12/50 cartes déjà vérifiées.
+collection_page | Page 4/190 : reprise à la position 13/50.
 collection_card | Exemple [PC] : ouverture du marché.
 collection_result | Exemple [PC] : moyenne 63 WB, 120 ventes ; étiquette ajoutée (les deux seuils sont dépassés).
 collection_heartbeat | En cours : page 4, carte 14, Exemple [R], étape market.
 collection_recovering | Corey Sevier [SR] : Le marché ne propose pas la rareté SR. Rechargement de la collection pour continuer.
 collection_card_error | Corey Sevier [SR] : carte à revoir (market_rarity_missing) — Le marché ne propose pas la rareté SR. Passage à la suivante, aucun nouveau clic d’étiquetage.
-collection_changed | La page 4 a changé ; reprise à la carte 15. Poursuite à la position courante ; certaines cartes peuvent être manquées ou revues.
+collection_locating | Recherche de la carte de reprise : Exemple.
+collection_cursor_found | Reprise page 5, carte 15 : Exemple. Les nouvelles cartes placées avant le repère sont ignorées.
 collection_paused | Lecture refusé : HTTP 429, /api/... Intervention nécessaire avant reprise.
 collection_complete | Parcours C,PC,R terminé : 10000 cartes traitées, 12 erreurs à revoir, 3 changements de collection.
 ```
 
 Un message de suivi apparaît toutes les 30 secondes pendant le parcours. Les
-étapes sont `opening`, `market`, `label`, `simulation` et `recovery`. Les raisons de rejet
+étapes sont `opening`, `market`, `label`, `simulation`, `recovery` et `locating`. Les raisons de rejet
 sont `no_sales`, `average_too_low` et `not_enough_sales`. Les actions sont
 `skipped`, `would_tag`, `tagged` et `already_tagged`.
 
@@ -280,12 +282,28 @@ La connexion et la progression restent conservées ; `--fresh` n’est pas néce
 pour réparer uniquement le démarrage.
 
 L’interface n’expose pas d’identifiant unique d’exemplaire dans les cartes du
-tableau. Le bot reprend directement à la dernière page visitée, à la position
-sauvegardée, y compris avec les anciennes progressions. Les pages précédentes ne
-sont pas revérifiées. Si la page courante a changé (`collection_changed`), le bot
-actualise son relevé des titres, raretés et statistiques ATK/DEF puis poursuit
-sans remettre les compteurs à zéro. Si des pages ont disparu, il revient à la
-dernière page existante. La carte ouverte et le marché restent contrôlés avant l’étiquetage.
+tableau. Le point de reprise mémorise le nom, la rareté et les statistiques ATK/DEF
+de la carte attendue, jusqu’à 16 cartes suivantes visibles sur la page et jusqu’à
+8 cartes précédentes. La page et la position servent seulement d’indication de recherche.
+
+À la reprise ou après un décalage, le bot recherche ce groupe de repères près de
+la page estimée, puis plus loin si nécessaire. Il revient ainsi à la carte attendue,
+même si des achats ou ouvertures ont ajouté des pages avant elle. Si cette carte
+a été vendue ou renvoyée en tête après une enchère, les voisines restées dans la
+pile permettent de poursuivre après le dernier passage, sans analyser ce nouveau début.
+Cette recherche relit les listes de cartes ; elle ne réévalue pas le marché des
+cartes déjà passées. `collection_locating` annonce la recherche et
+`collection_cursor_found` indique la carte et la nouvelle position de reprise.
+
+Si tous les repères ont disparu ou si plusieurs exemplaires sont strictement
+identiques, le bot signale une reprise approximative et continue. L’identité exacte
+d’un exemplaire identique ne peut pas être garantie avec les informations affichées.
+Les contrôles du titre, de la rareté du détail et du marché restent actifs avant l’étiquetage.
+
+La migration de l’ancien tri Rareté vers Date d’ajout exige **une fois**
+`collection-resume --fresh`. Un changement de raretés, par exemple passer de
+`C,PC,R,SR` à `C,PC`, exige aussi ce nouveau parcours. Les reprises suivantes
+conservent les repères avec `collection-resume` sans `--fresh`.
 
 `--fresh` est utile pour refaire volontairement un passage, notamment après un
 changement de seuils ou de raretés (`scan_policy_changed`) :
@@ -367,8 +385,12 @@ commande complète en étiquetage et le refus d’un badge optimiste non enregis
 Corey Sevier [SR] sans marché SR est ignorée, puis Broad Peak [SR] est étiquetée
 sur la même page. Un badge non enregistré est signalé sans bloquer les autres
 cartes ni répéter le clic. Un ajout entre deux exécutions permet de reprendre
-directement page 2 sans `--fresh`. Les tests vérifient aussi les suppressions de
+sur la carte attendue, déplacée de la page 2 à la page 3, sans `--fresh` et sans
+traiter la nouvelle carte du haut. Les tests vérifient aussi les suppressions de
 pages, les ajouts en cours de page et la conservation des erreurs dans le rapport.
+Ils simulent un achat entre la lecture du marché et l’ajout d’étiquette, des ventes
+avant le point de reprise, un retour de la carte attendue en tête, un grand décalage
+sans changement du nombre de pages et la disparition de tous les repères.
 Aucun accès au compte n’est nécessaire.
 
 Vérifications sur le vrai site le 14 novembre 2026 : connexion Edge déjà active,

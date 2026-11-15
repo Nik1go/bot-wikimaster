@@ -24,6 +24,7 @@ const cards = [
   { title:'Corey Sevier', rarity:'SR', stats:['1 234','5 678'], unavailableMarket:true },
   { title:'Broad Peak', rarity:'SR', stats:['6 363','6 039'], average:100, sales:181 },
 ];
+cards.forEach((card,index)=>card.fixtureId=index);
 const labels = new Set();
 let writes = 0, refusal = false, selectionMode = 'exclusive', headingMismatch = false, loginRequired=false, labelEndpoint='/collection', persistWrites=true;
 const handleRequest = async(req,res)=>{
@@ -43,8 +44,8 @@ const handleRequest = async(req,res)=>{
   res.end(String.raw`<!doctype html><html><body><main>
   <h1>Collection</h1><input placeholder="Rechercher par titre ou catégorie...">
   <button aria-label="Filtrer par étiquette">Toutes les étiquettes</button>
-  <button aria-label="Trier la collection" onclick="document.getElementById('sort').hidden=false">Rareté</button>
-  <div id="sort" hidden><button role="option" onclick="this.parentElement.hidden=true">Rareté</button></div>
+  <button id="sortButton" aria-label="Trier la collection" onclick="document.getElementById('sort').hidden=false">Rareté</button>
+  <div id="sort" hidden><button role="option" onclick="document.getElementById('sortButton').textContent=this.textContent;this.parentElement.hidden=true">Date d'ajout</button></div>
   <div id="filters"></div><div id="grid"></div><div id="pager"></div></main><div id="detail"></div>
   <script>
   const cards=${JSON.stringify(cards)}; const saved=new Set(${JSON.stringify([...labels])});
@@ -78,12 +79,12 @@ const handleRequest = async(req,res)=>{
         const heading=sole?names[sole]:'Rare, Peu commun';
         content+='<h3>Évolution des prix</h3><div><p>Ventes</p><p>'+(c.sales??81)+'</p></div><div><p>Moyenne</p><p>'+avg+'</p></div><h3>10 dernières ventes · '+(headingMismatch?'Super Rare':heading)+'</h3>';
       }
-    }else content='<p>Étiquettes</p>'+(saved.has(active)?'<button aria-label="Retirer l\'étiquette à vendre">×</button>':'')+'<input role="combobox" oninput="options()"><ul role="listbox" hidden><li role="option"><button onclick="tag()">'+(saved.size?'à vendre':'Créer à vendre')+'</button></li></ul>';
+    }else content='<p>Étiquettes</p>'+(saved.has(c.fixtureId)?'<button aria-label="Retirer l\'étiquette à vendre">×</button>':'')+'<input role="combobox" oninput="options()"><ul role="listbox" hidden><li role="option"><button onclick="tag()">'+(saved.size?'à vendre':'Créer à vendre')+'</button></li></ul>';
     document.getElementById('detail').innerHTML='<div class="card-frame"><button aria-label="Fermer" onclick="document.getElementById(\'detail\').innerHTML=\'\'">Fermer</button><div><h2>'+esc(c.title)+'</h2><div><span>'+name+'</span><div role="tablist"><button role="tab" onclick="market=false;renderModal()">Détails</button><button role="tab" onclick="market=true;renderModal()">Marché</button></div></div></div>'+content+'</div>';
   }
   function toggle(r){if(selectionMode==='exclusive')rarities=new Set([r]);else rarities.has(r)?rarities.delete(r):rarities.add(r);renderModal();}
   function options(){document.querySelector('[role=listbox]').hidden=false;}
-  async function tag(){saved.add(active);renderModal();await fetch(labelEndpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({index:active})});}
+  async function tag(){const index=cards[active].fixtureId;saved.add(index);renderModal();await fetch(labelEndpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({index})});}
   renderGrid();
   </script></body></html>`);
 };
@@ -183,12 +184,65 @@ try {
   const changedState=state();
   const moving=new CollectionSite(page,config,{sleep,log:async()=>{},baseUrl:origin});
   await scanCollection(moving,config,changedState,{sleep,limit:3});
-  cards.unshift({title:'Nouvelle carte après ouverture',rarity:'R',stats:['1 234','5 678'],average:1,sales:10});
+  cards.unshift({title:'Nouvelle carte après ouverture',rarity:'R',stats:['1 234','5 678'],average:1,sales:10,fixtureId:1000});
   const resumed=await scanCollection(moving,config,changedState,{sleep});
   assert.equal(resumed.complete,true); assert.equal(resumed.approximate,true); assert.ok(resumed.totals.changes>=1);
-  assert.ok(changedState.events.some(e=>e.event==='collection_changed'&&e.page===2));
+  assert.equal(resumed.totals.checked,6);
+  assert.ok(changedState.events.some(e=>e.event==='collection_cursor_found'&&e.page===3));
+  assert.ok(!changedState.events.some(e=>e.event==='collection_card'&&e.title==='Nouvelle carte après ouverture'));
   cards.shift(); moving.dispose();
-  console.log('OK : ajout après un arrêt, reprise directe page 2 sans fresh et parcours terminé.');
+  console.log('OK : ajout après un arrêt, carte attendue retrouvée page 3 ; nouvelle carte du haut ignorée.');
+  const originalCards=cards.slice();
+  labels.clear(); writes=0; labelEndpoint='/collection';
+  const liveState=state();
+  const live=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
+  const readMarket=live.readMarket.bind(live); let added=false;
+  live.readMarket=async card=>{
+    const market=await readMarket(card);
+    if(!added) {
+      added=true;
+      cards.unshift({title:'Achat pendant le tri',rarity:'R',stats:['1 234','5 678'],average:999,sales:999,fixtureId:1001});
+    }
+    return market;
+  };
+  const shifted=await scanCollection(live,{...config,apply:true},liveState,{sleep});
+  assert.equal(shifted.complete,true); assert.equal(shifted.totals.checked,6); assert.equal(shifted.totals.tagged,2);
+  assert.deepEqual([...labels],[0,1]); assert.equal(writes,2);
+  assert.ok(!liveState.events.some(e=>e.event==='collection_card'&&e.title==='Achat pendant le tri'));
+  live.dispose(); cards.splice(0,cards.length,...originalCards);
+  console.log('OK : achat entre lecture du marché et ajout — carte initiale relue après déplacement, aucune étiquette sur la nouvelle arrivée.');
+  const returnState=state();
+  const returning=new CollectionSite(page,config,{sleep,log:async()=>{},baseUrl:origin});
+  await scanCollection(returning,config,returnState,{sleep,limit:3});
+  const returned=cards.find(c=>c.title==='Sans vente');
+  cards.splice(0,cards.length,returned,...originalCards.filter(c=>!['Même carte','Sans vente'].includes(c.title)));
+  const afterSales=await scanCollection(returning,config,returnState,{sleep});
+  assert.equal(afterSales.complete,true);
+  const attempted=returnState.events.filter(e=>e.event==='collection_card').map(e=>e.title);
+  assert.deepEqual(attempted,['Même carte','Même carte','Limite 50','Sergio Gómez','Limite 80 ventes']);
+  returning.dispose(); cards.splice(0,cards.length,...originalCards);
+  console.log('OK : ventes avant le repère et retour de la carte attendue en tête — poursuite sur la voisine restée en place.');
+  for(const bought of [true,false]) {
+    const boundaryState=state();
+    const boundary=new CollectionSite(page,config,{sleep,log:async()=>{},baseUrl:origin});
+    const next=boundary.nextPage.bind(boundary); let moved=false;
+    boundary.nextPage=async number=>{
+      if(!moved) {
+        moved=true;
+        await page.evaluate(bought=>{
+          if(bought) cards.unshift({title:'Achat au changement de page',rarity:'R',stats:['1 234','5 678'],average:999,sales:999,fixtureId:2000});
+          else cards.shift();
+          renderGrid();
+        },bought);
+      }
+      await next(number);
+    };
+    const result=await scanCollection(boundary,config,boundaryState,{sleep});
+    assert.equal(result.complete,true); assert.equal(result.totals.checked,6);
+    assert.deepEqual(boundaryState.events.filter(e=>e.event==='collection_card').map(e=>e.title),originalCards.map(c=>c.title));
+    boundary.dispose();
+  }
+  console.log('OK : achat ou vente révélé au changement de page — aucune nouvelle carte traitée ni carte restante sautée.');
   selectionMode='exclusive'; refusal=false; labels.clear(); writes=0;
   for (const rarity of ['R','C','SR','UR','L']) {
     const custom={...readCollectionConfig({COLLECTION_RARITIES:rarity,COLLECTION_MIN_AVERAGE:'70',COLLECTION_MIN_SALES:'80'}),delayMs:0,timeoutMs:3000};

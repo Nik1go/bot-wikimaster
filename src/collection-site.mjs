@@ -1,5 +1,6 @@
 import { PauseError } from './core.mjs';
 import { rarityCode, normalize, frenchNumber, pageSignature } from './collection-core.mjs';
+import { collectionCursor, locateCollectionCursor, cardIdentity } from './collection-cursor.mjs';
 
 export const CARD_SELECTOR = 'main div.cursor-pointer:has(> img[src*="/rarity/"]):has(h3)';
 const MODAL = 'div.card-frame:has(> button[aria-label="Fermer"])';
@@ -101,7 +102,8 @@ export class CollectionSite {
     const filter = this.page.getByRole('button', { name: 'Filtrer par étiquette', exact: true });
     if (normalize(await filter.innerText()) !== 'toutes les étiquettes') throw new PauseError('collection_filtered', 'Un filtre d’étiquette est actif. Choisir Toutes les étiquettes dans collection-login.');
     await this.page.getByRole('button', { name: 'Trier la collection', exact: true }).click();
-    await this.page.getByRole('option', { name: 'Rareté', exact: true }).click();
+    await this.page.getByRole('option', { name: "Date d'ajout", exact: true }).click();
+    if (normalize(await this.page.getByRole('button', { name: 'Trier la collection', exact: true }).innerText()) !== "date d'ajout") throw new PauseError('collection_sort_invalid', 'Le tri Date d’ajout n’est pas actif.');
     const reset = this.page.getByRole('button', { name: 'Réinitialiser rareté', exact: true });
     if (await reset.isVisible()) { await reset.click(); await this.readPage(false); }
     for (const code of this.config.rarities) {
@@ -142,7 +144,7 @@ export class CollectionSite {
   async openCard(index, card, signature) {
     const current = await this.readPage();
     if (pageSignature(current.cards) !== signature) throw new PauseError('collection_changed', 'L’ordre des cartes a changé pendant l’ouverture ; carte écartée pour ce passage.');
-    this.active = { index, card, signature, pageNumber: current.number };
+    this.active = { index, card, signature, pageNumber: current.number, cursor: collectionCursor(current,index) };
     await this.page.locator(CARD_SELECTOR).nth(index).getByRole('heading', { level: 3 }).click();
     await this.until(async () => await this.modal().isVisible(), 'card_open_timeout', 'Le détail de la carte ne s’ouvre pas.');
     await this.assertCard(card);
@@ -245,8 +247,10 @@ export class CollectionSite {
     // A UI badge can be optimistic. A full navigation fetches the collection
     // again; verify the same page/slot/rarity before accepting the stored label.
     await this.prepare();
-    await this.goToPage(active.pageNumber);
-    await this.openCard(active.index, card, active.signature);
+    const location = await locateCollectionCursor(this,active.cursor,{log:this.log});
+    const reread = location.page.cards[location.index];
+    if (!reread || cardIdentity(reread)!==cardIdentity(card)) throw new PauseError('collection_changed','La carte étiquetée a disparu ou changé de place sans repère fiable ; aucun nouveau clic.');
+    await this.openCard(location.index,card,pageSignature(location.page.cards));
     if (!(await exists())) throw new PauseError('label_unconfirmed', `Étiquette absente après rechargement de ${card.title} [${card.rarity}]. Requêtes : ${JSON.stringify(summary())}. Aucun second clic automatique.`);
     await this.healthy();
     await this.log('collection_label_verified', { title: card.title, rarity: card.rarity, confirmation: 'reloaded_collection', requests: summary(), message: `${card.title} [${card.rarity}] : étiquette relue après rechargement de la collection.` });

@@ -18,7 +18,7 @@ function store() {
 class Site {
   constructor(pages) { this.pages = pages; this.labels = new Set(); this.checked = []; this.tagCalls = 0; }
   async prepare() { this.number = 1; }
-  async readPage() { return { number: this.number, totalPages: this.pages.length, cards: this.pages[this.number-1] }; }
+  async readPage() { return { number: this.number, totalPages: this.pages.length, cards: structuredClone(this.pages[this.number-1]) }; }
   async openCard(index) { this.current = `${this.number}:${index}`; this.checked.push(this.current); }
   async readMarket(c) { return { rarity: c.rarity, sales: 81, average: 51 }; }
   async ensureLabel() {
@@ -93,14 +93,14 @@ test('interruption après écriture : reprise idempotente et carte suivante seul
   assert.equal(site.labels.size,2);
   assert.equal(result.totals.alreadyTagged,1);
 });
-test('page modifiée avant reprise : conserve la position et continue sans fresh', async () => {
-  const site = new Site([[card(),card()]]), state = store();
+test('page modifiée avant reprise : retrouve la carte et ignore les nouvelles du haut', async () => {
+  const site = new Site([[card('A'),card('B')]]), state = store();
   await scanCollection(site,config,state,{...options,limit:1});
   site.pages[0].unshift(card('Nouveau'));
   const result = await scanCollection(site,config,state,options);
-  assert.equal(result.totals.checked,3);
+  assert.equal(result.totals.checked,2);
   assert.equal(result.totals.changes,1); assert.equal(result.approximate,true);
-  assert.deepEqual(site.checked,['1:0','1:1','1:2']);
+  assert.deepEqual(site.checked,['1:0','1:2']);
   assert.equal(state.events.filter(e=>e.event==='collection_changed').length,1);
 });
 test('changement de seuil refusé, étiquettes exclues de la signature de page', async () => {
@@ -122,6 +122,16 @@ test('changement de rareté exige un nouveau parcours', async () => {
   const site=new Site([[card(),card()]]), state=store();
   await scanCollection(site,config,state,{...options,limit:1});
   await assert.rejects(scanCollection(site,{...config,rarities:['R']},state,options),{code:'scan_policy_changed'});
+});
+
+test('ancien tri par rareté : exige fresh avant de changer l’ordre de parcours', async () => {
+  const site=new Site([[card('A'),card('B')]]), state=store();
+  await scanCollection(site,config,state,{...options,limit:1});
+  const saved=await state.get('progress'); const policy=JSON.parse(saved.policy); delete policy.sort;
+  saved.policy=JSON.stringify(policy); await state.put('progress',saved);
+  await assert.rejects(scanCollection(site,config,state,options),{code:'scan_policy_changed'});
+  const result=await scanCollection(site,config,state,{...options,fresh:true});
+  assert.equal(result.complete,true); assert.equal(result.totals.checked,2);
 });
 test('données du mauvais marché : carte ignorée, erreur conservée et parcours terminé', async () => {
   const site = new Site([[card()]]), state = store();
@@ -165,8 +175,27 @@ test('ajout en cours de page : relit les cartes à la position courante et garde
     return market;
   };
   const result = await scanCollection(site,config,state,options);
-  assert.equal(result.complete,true); assert.equal(result.totals.checked,3); assert.equal(result.totals.changes,1);
-  assert.deepEqual(site.checked,['1:0','1:1','1:2']);
+  assert.equal(result.complete,true); assert.equal(result.totals.checked,2); assert.ok(result.totals.changes>=1);
+  assert.deepEqual(site.checked,['1:0','1:2']);
+});
+
+test('achat ou vente au changement de page : retrouve la dernière carte traitée avant de poursuivre', async () => {
+  for (const bought of [true,false]) {
+    const site=new Site([[card('A'),card('B')],[card('C'),card('D')],[card('E')]]), state=store(), titles=[];
+    const open=site.openCard.bind(site), next=site.nextPage.bind(site); let changed=false;
+    site.openCard=async(index,c,...args)=>{titles.push(c.title);return open(index,c,...args);};
+    site.nextPage=async n=>{
+      if(!changed) {
+        changed=true; const pile=site.pages.flat();
+        if(bought) pile.unshift(card('Nouvelle')); else pile.shift();
+        site.pages=[]; for(let i=0;i<pile.length;i+=2)site.pages.push(pile.slice(i,i+2));
+      }
+      await next(n);
+    };
+    const result=await scanCollection(site,config,state,options);
+    assert.equal(result.complete,true); assert.equal(result.totals.checked,5);
+    assert.deepEqual(titles,['A','B','C','D','E']);
+  }
 });
 
 test('suppression de pages avant reprise : position ramenée à la dernière page existante', async () => {
@@ -186,7 +215,7 @@ test('pagination modifiée pendant Suivant : recharge et continue ou termine si 
     };
     const result = await scanCollection(site,config,state,options);
     assert.equal(result.complete,true); assert.equal(result.totals.checked,removed?1:2);
-    assert.equal(result.totals.changes,1);
+    assert.ok(result.totals.changes>=1);
   }
 });
 
