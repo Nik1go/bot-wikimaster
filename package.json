@@ -7,7 +7,12 @@
   "scripts": {
     "start": "node src/index.mjs run",
     "test": "node --test",
+    "test:collection:browser": "node scripts/collection-browser-check.mjs",
     "check": "node src/index.mjs check",
+    "collection:login": "node src/index.mjs collection-login",
+    "collection:scan": "node src/index.mjs collection-scan",
+    "collection:status": "node src/index.mjs collection-status",
+    "collection:report": "node src/index.mjs collection-report",
     "market:demo": "node src/index.mjs market-demo",
     "market:compare": "node src/index.mjs market-compare",
     "market:once": "node src/index.mjs market-once",

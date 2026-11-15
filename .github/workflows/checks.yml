@@ -29,8 +29,11 @@ jobs:
       - run: cp .env.example .env
       - run: bash -n docker/entrypoint.sh
       - run: docker compose config --quiet
+      - run: docker compose -f compose.yaml -f compose.collection.yaml config --quiet
       - run: docker compose build
       - name: Offline comparison without a desktop
         run: docker compose run --rm -e DISPLAY=invalid wiki-bot market-compare --demo
       - run: docker compose run --rm wiki-bot smoke
+      - name: Collection browser check on a local fixture
+        run: docker compose run --rm --entrypoint node wiki-bot scripts/collection-browser-check.mjs
       - run: docker compose run --rm wiki-bot manual-smoke

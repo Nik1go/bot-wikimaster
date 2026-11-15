@@ -1,0 +1,10 @@
+services:
+  wiki-collection:
+    extends:
+      file: compose.yaml
+      service: wiki-bot
+    profiles: [collection]
+    command: [collection-run]
+    environment:
+      DATA_DIR: /data
+      COLLECTION_APPLY: "${COLLECTION_APPLY:-false}"

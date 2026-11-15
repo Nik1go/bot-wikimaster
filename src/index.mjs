@@ -7,6 +7,17 @@ import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
+if (mode.startsWith('collection-')) {
+  try {
+    const { runCollectionCommand, COLLECTION_COMMANDS } = await import('./collection-cli.mjs');
+    if (!COLLECTION_COMMANDS.includes(mode)) throw new PauseError('invalid_command', `Commandes : ${COLLECTION_COMMANDS.join(' | ')}`);
+    process.exitCode = await runCollectionCommand(mode, process.argv.slice(3));
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'collection_error', code: error.code || 'configuration_error', message: error.message }));
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
 const marketModes = ['market-demo', 'market-compare', 'market-once', 'market-run', 'market-status', 'market-report', 'market-resume', 'market-reconcile', 'market-link-sale', 'market-unlock'];
 if (![...marketModes, 'login', 'check', 'once', 'run', 'resume', 'status', 'smoke', 'manual', 'manual-smoke', 'use-manual-session'].includes(mode)) {
   console.error('Commande : login | check | once | run | resume | status | smoke | manual | manual-smoke | use-manual-session | ' + marketModes.join(' | '));

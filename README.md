@@ -1,5 +1,10 @@
 # WikiMasters — marché en simulation, paquets en veille
 
+**Nouveau : tri des cartes C / PC / R.** Un bot distinct parcourt la collection,
+isole la rareté du marché et ajoute « à vendre » si la moyenne est **> 50 WB**
+et le compteur de ventes **> 80**. Reprise, simulation et diagnostic inclus.
+Voir [le guide complet de connexion, test et déploiement VPS](COLLECTION.md).
+
 La première version du marché est disponible : sélection d’une légendaire à la
 fois, plafond 3 500 WB et 50 % de la référence, contrôle du portefeuille,
 classement par plus grand écart en WB, suivi des contre-enchères et logs explicatifs.
