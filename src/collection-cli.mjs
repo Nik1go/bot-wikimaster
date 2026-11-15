@@ -48,12 +48,16 @@ export async function runCollectionCommand(command, args = [], env = process.env
     let events = '';
     try { events = await readFile(path.join(store.dir, 'events.jsonl'), 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const latest = new Map();
+    const errors = [], changes = [];
     for (const line of events.split('\n').filter(Boolean)) {
       let event;
       try { event = JSON.parse(line); } catch { continue; }
-      if (progress && event.event === 'collection_result' && event.at >= progress.startedAt && event.eligible) latest.set(`${event.page}:${event.index}`, event);
+      if (!progress || event.at < progress.startedAt) continue;
+      if (event.event === 'collection_result' && event.eligible) latest.set(`${event.page}:${event.index}:${event.title}:${event.rarity}`, event);
+      if (event.event === 'collection_card_error') errors.push(event);
+      if (event.event === 'collection_changed') changes.push(event);
     }
-    console.log(JSON.stringify({ mode: config.apply ? 'apply' : 'simulation', totals: progress?.totals ?? null, complete: progress?.complete ?? false, candidates: [...latest.values()] }, null, 2));
+    console.log(JSON.stringify({ mode: config.apply ? 'apply' : 'simulation', totals: progress?.totals ?? null, complete: progress?.complete ?? false, approximate: progress?.approximate ?? false, candidates: [...latest.values()], errors, changes }, null, 2));
     return 0;
   }
   if (command === 'collection-unlock') {

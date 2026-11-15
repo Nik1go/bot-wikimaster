@@ -11,7 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CollectionSite } from '../src/collection-site.mjs';
-import { scanCollection, readCollectionConfig } from '../src/collection-core.mjs';
+import { scanCollection, readCollectionConfig, pageSignature } from '../src/collection-core.mjs';
 
 const { chromium } = await import(process.env.COLLECTION_TEST_PLAYWRIGHT || 'playwright');
 const cards = [
@@ -21,11 +21,13 @@ const cards = [
   { title:'Sans vente', rarity:'C', stats:['1 234','5 678'] },
   { title:'Sergio Gómez', rarity:'R', stats:['5 068','4 048'], average:12, sales:25 },
   { title:'Limite 80 ventes', rarity:'PC', stats:['1 234','5 678'], average:60, sales:80 },
+  { title:'Corey Sevier', rarity:'SR', stats:['1 234','5 678'], unavailableMarket:true },
   { title:'Broad Peak', rarity:'SR', stats:['6 363','6 039'], average:100, sales:181 },
 ];
 const labels = new Set();
-let writes = 0, refusal = false, selectionMode = 'exclusive', headingMismatch = false, labelEndpoint='/collection', persistWrites=true;
+let writes = 0, refusal = false, selectionMode = 'exclusive', headingMismatch = false, loginRequired=false, labelEndpoint='/collection', persistWrites=true;
 const handleRequest = async(req,res)=>{
+  if (loginRequired && req.url==='/collection' && req.method==='GET') { res.writeHead(302,{location:'/login'}); res.end(); return; }
   if (req.method==='OPTIONS') {
     res.writeHead(204,{'access-control-allow-origin':'*','access-control-allow-methods':'POST','access-control-allow-headers':'content-type'});
     res.end(); return;
@@ -70,7 +72,7 @@ const handleRequest = async(req,res)=>{
     if(market){
       if(c.rarity==='C') content="<h3>10 dernières ventes</h3><p>Aucune vente pour l'instant.</p>";
       else {
-        content=(selectionMode==='exclusive'?['Toutes','C','PC','R','SR','UR','L']:['R','PC','SR']).map(r=>'<button aria-pressed="'+rarities.has(r)+'" onclick="toggle(\''+r+'\')">'+names[r]+'</button>').join('');
+        content=(selectionMode==='exclusive'?['Toutes','C','PC','R','SR','UR','L']:['R','PC','SR']).filter(r=>!c.unavailableMarket||r!==c.rarity).map(r=>'<button aria-pressed="'+rarities.has(r)+'" onclick="toggle(\''+r+'\')">'+names[r]+'</button>').join('');
         const sole=rarities.size===1?[...rarities][0]:null;
         const avg=sole===c.rarity && c.average!=null?c.average:sole==='PC'?'60':c.rarity==='R'?'50':'999';
         const heading=sole?names[sole]:'Rare, Peu commun';
@@ -91,7 +93,7 @@ backend.listen(0,'127.0.0.1'); await once(backend,'listening');
 const origin=`http://127.0.0.1:${server.address().port}`;
 const backendOrigin=`http://127.0.0.1:${backend.address().port}`;
 const browser = await chromium.launch({headless:true,chromiumSandbox:true,...(process.env.COLLECTION_TEST_EXECUTABLE ? {executablePath:process.env.COLLECTION_TEST_EXECUTABLE} : {})});
-const state=()=>{const data=new Map();return {get:async k=>structuredClone(data.get(k)??null),put:async(k,v)=>data.set(k,structuredClone(v)),remove:async k=>data.delete(k),log:async()=>{}};};
+const state=()=>{const data=new Map(),events=[];return {events,get:async k=>structuredClone(data.get(k)??null),put:async(k,v)=>data.set(k,structuredClone(v)),remove:async k=>data.delete(k),log:async(event,details)=>events.push({event,...details})};};
 try {
   const cliDir=await mkdtemp(path.join(process.env.TEST_TMPDIR||os.tmpdir(),'collection-cli-browser-'));
   const childFile=fileURLToPath(new URL('./collection-cli-check-child.mjs',import.meta.url));
@@ -108,11 +110,11 @@ try {
   assert.match(taggedCli.stdout,/collection_label_verified/);
   assert.equal(labels.has(0),true);
   await assert.rejects(stat(path.join(cliDir,'collection.lock')),{code:'ENOENT'});
-  headingMismatch=true;
+  loginRequired=true;
   await assert.rejects(runCli(['--dry-run','--limit','1']),error=>error.code===1&&/collection_paused/.test(error.stdout)&&/collection_browser_closed/.test(error.stdout)&&!/unsettled top-level await/.test(error.stderr));
   assert.equal(JSON.parse(await readFile(path.join(cliDir,'collection','simulation','state','progress.json'),'utf8')).totals.checked,2);
   await assert.rejects(stat(path.join(cliDir,'collection.lock')),{code:'ENOENT'});
-  headingMismatch=false;
+  loginRequired=false;
   await runCli([],'collection-resume');
   if(process.platform==='linux') {
     const service=spawn(process.execPath,[childFile,'collection-run',cliDir,origin],{env:process.env,stdio:['ignore','pipe','pipe']});
@@ -137,17 +139,20 @@ try {
   for (selectionMode of ['exclusive','multi']) {
   labels.clear(); writes=0; refusal=false;
   let site=new CollectionSite(page,config,{sleep,log:async()=>{},baseUrl:origin});
-  const dry=await scanCollection(site,config,state(),{sleep});
-  assert.equal(dry.totals.checked,7); assert.equal(dry.totals.eligible,3); assert.equal(writes,0);
+  const dryState=state();
+  const dry=await scanCollection(site,config,dryState,{sleep});
+  assert.equal(dry.totals.checked,8); assert.equal(dry.totals.eligible,3); assert.equal(dry.totals.errors,1); assert.equal(writes,0);
+  assert.equal(dryState.events.find(e=>e.event==='collection_card_error').title,'Corey Sevier');
+  assert.equal(dryState.events.find(e=>e.event==='collection_card_error').code,'market_rarity_missing');
   site.dispose();
   site=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
   const real=await scanCollection(site,{...config,apply:true},state(),{sleep});
-  assert.equal(real.totals.tagged,3); assert.deepEqual([...labels],[0,1,6]);
+  assert.equal(real.totals.tagged,3); assert.equal(real.totals.errors,1); assert.deepEqual([...labels],[0,1,7]);
   site.dispose();
   // Server-persisted labels are read after a full navigation; no toggles.
   site=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
   const repeated=await scanCollection(site,{...config,apply:true},state(),{sleep});
-  assert.equal(repeated.totals.alreadyTagged,3); assert.equal(writes,3); site.dispose();
+  assert.equal(repeated.totals.alreadyTagged,3); assert.equal(repeated.totals.errors,1); assert.equal(writes,3); site.dispose();
   labels.clear(); refusal=true;
   site=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
   const failed=state();
@@ -155,18 +160,35 @@ try {
   assert.equal((await failed.get('progress')).pages[1].done,0); assert.equal(writes,3); site.dispose();
   labels.clear(); refusal=false; headingMismatch=true;
   site=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
-  await assert.rejects(scanCollection(site,{...config,apply:true},state(),{sleep}),error => error.code==='market_rarity_unconfirmed' && /sélection Peu commun/.test(error.message) && /Super Rare/.test(error.message));
+  await site.prepare();
+  const unconfirmedPage=await site.readPage();
+  await site.openCard(0,unconfirmedPage.cards[0],pageSignature(unconfirmedPage.cards));
+  await assert.rejects(site.readMarket(unconfirmedPage.cards[0]),error => error.code==='market_rarity_unconfirmed' && /sélection Peu commun/.test(error.message) && /Super Rare/.test(error.message));
   assert.equal(labels.size,0); assert.equal(writes,3); site.dispose(); headingMismatch=false;
-  console.log(`OK : ${labelEndpoint}, filtre ${selectionMode} — rareté isolée, doublons, pagination, simulation, étiquettes persistantes, refus HTTP 429 sans nouvelle tentative.`);
+  console.log(`OK : ${labelEndpoint}, filtre ${selectionMode} — Corey sans marché SR ignorée, Broad Peak suivante étiquetée, doublons, simulation, refus HTTP 429 sans nouvelle tentative.`);
   }
   }
-  cards.pop();
+  cards.splice(6,2);
   labels.clear(); writes=0; refusal=false; persistWrites=false; selectionMode='exclusive';
   const optimistic=new CollectionSite(page,{...config,apply:true},{sleep,log:async()=>{},baseUrl:origin});
   const optimisticState=state();
-  await assert.rejects(scanCollection(optimistic,{...config,apply:true},optimisticState,{sleep}),error=>error.code==='label_unconfirmed'&&/après rechargement/.test(error.message));
-  assert.equal(labels.size,0); assert.equal(writes,1); assert.equal((await optimisticState.get('progress')).pages[1].done,0); optimistic.dispose(); persistWrites=true;
-  console.log('OK : un badge optimiste et HTTP 200 ne suffisent pas si le serveur ne conserve pas l’étiquette.');
+  const unpersisted=await scanCollection(optimistic,{...config,apply:true},optimisticState,{sleep});
+  assert.equal(unpersisted.complete,true); assert.equal(unpersisted.totals.errors,2); assert.equal(unpersisted.totals.tagged,0);
+  assert.equal(labels.size,0); assert.equal(writes,2);
+  assert.ok(optimisticState.events.filter(e=>e.event==='collection_card_error').every(e=>e.code==='label_unconfirmed'&&/après rechargement/.test(e.reason)));
+  await scanCollection(optimistic,{...config,apply:true},optimisticState,{sleep});
+  assert.equal(writes,2); optimistic.dispose(); persistWrites=true;
+  console.log('OK : badge non enregistré consigné à revoir ; poursuite sans nouveau clic ni répétition à la reprise.');
+  // Real DOM pagination + changed server-side collection between two runs.
+  const changedState=state();
+  const moving=new CollectionSite(page,config,{sleep,log:async()=>{},baseUrl:origin});
+  await scanCollection(moving,config,changedState,{sleep,limit:3});
+  cards.unshift({title:'Nouvelle carte après ouverture',rarity:'R',stats:['1 234','5 678'],average:1,sales:10});
+  const resumed=await scanCollection(moving,config,changedState,{sleep});
+  assert.equal(resumed.complete,true); assert.equal(resumed.approximate,true); assert.ok(resumed.totals.changes>=1);
+  assert.ok(changedState.events.some(e=>e.event==='collection_changed'&&e.page===2));
+  cards.shift(); moving.dispose();
+  console.log('OK : ajout après un arrêt, reprise directe page 2 sans fresh et parcours terminé.');
   selectionMode='exclusive'; refusal=false; labels.clear(); writes=0;
   for (const rarity of ['R','C','SR','UR','L']) {
     const custom={...readCollectionConfig({COLLECTION_RARITIES:rarity,COLLECTION_MIN_AVERAGE:'70',COLLECTION_MIN_SALES:'80'}),delayMs:0,timeoutMs:3000};

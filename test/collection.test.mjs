@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, appendFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readCollectionConfig, frenchNumber, rarityCode, decision, scanCollection, pageSignature } from '../src/collection-core.mjs';
 import { collectionArguments, runCollectionCommand } from '../src/collection-cli.mjs';
 import { CollectionSite } from '../src/collection-site.mjs';
+import { PauseError } from '../src/core.mjs';
 
 const config = { ...readCollectionConfig({}), delayMs: 0 };
 const card = (title = 'Carte', rarity = 'R') => ({ title, rarity, stats: ['1 234','5 678'] });
@@ -29,6 +30,8 @@ class Site {
   }
   async closeCard() {}
   async nextPage(n) { this.number = n; }
+  async goToPage(n) { this.number = n; }
+  async recoverCard(n) { this.number = Math.min(n,this.pages.length); }
 }
 const options = { sleep: async () => {} };
 
@@ -90,13 +93,15 @@ test('interruption après écriture : reprise idempotente et carte suivante seul
   assert.equal(site.labels.size,2);
   assert.equal(result.totals.alreadyTagged,1);
 });
-test('page modifiée avant reprise : arrêt, puis nouveau parcours explicite', async () => {
+test('page modifiée avant reprise : conserve la position et continue sans fresh', async () => {
   const site = new Site([[card(),card()]]), state = store();
   await scanCollection(site,config,state,{...options,limit:1});
   site.pages[0].unshift(card('Nouveau'));
-  await assert.rejects(scanCollection(site,config,state,options),{code:'collection_changed'});
-  const result = await scanCollection(site,config,state,{...options,fresh:true});
+  const result = await scanCollection(site,config,state,options);
   assert.equal(result.totals.checked,3);
+  assert.equal(result.totals.changes,1); assert.equal(result.approximate,true);
+  assert.deepEqual(site.checked,['1:0','1:1','1:2']);
+  assert.equal(state.events.filter(e=>e.event==='collection_changed').length,1);
 });
 test('changement de seuil refusé, étiquettes exclues de la signature de page', async () => {
   const site = new Site([[card(),card()]]), state = store();
@@ -118,12 +123,128 @@ test('changement de rareté exige un nouveau parcours', async () => {
   await scanCollection(site,config,state,{...options,limit:1});
   await assert.rejects(scanCollection(site,{...config,rarities:['R']},state,options),{code:'scan_policy_changed'});
 });
-test('données du mauvais marché : aucune étiquette et progression inchangée', async () => {
+test('données du mauvais marché : carte ignorée, erreur conservée et parcours terminé', async () => {
   const site = new Site([[card()]]), state = store();
   site.readMarket = async()=>({rarity:'PC',sales:200,average:999});
-  await assert.rejects(scanCollection(site,{...config,apply:true},state,options),{code:'market_rarity_mismatch'});
+  const result = await scanCollection(site,{...config,apply:true},state,options);
   assert.equal(site.tagCalls,0);
-  assert.equal(state.data.get('progress').pages[1].done,0);
+  assert.equal(result.pages[1].done,1); assert.equal(result.totals.errors,1); assert.equal(result.complete,true);
+  assert.equal(state.events.find(e=>e.event==='collection_card_error').code,'market_rarity_mismatch');
+});
+
+test('Corey sans marché SR : saute cette carte puis étiquette la SR suivante, sans répéter à la reprise', async () => {
+  const site = new Site([[card('Corey Sevier','SR'),card('Broad Peak','SR')]]), state = store();
+  const cfg = {...config,apply:true,rarities:['SR']};
+  site.readMarket = async c => {
+    if (c.title==='Corey Sevier') throw new PauseError('market_rarity_missing','Le marché ne propose pas la rareté SR.');
+    return {rarity:'SR',average:100,sales:181};
+  };
+  const first = await scanCollection(site,cfg,state,{...options,limit:1});
+  assert.equal(first.totals.errors,1); assert.equal(first.pages[1].done,1); assert.equal(site.tagCalls,0);
+  const result = await scanCollection(site,cfg,state,options);
+  assert.equal(result.complete,true); assert.equal(result.totals.errors,1); assert.equal(result.totals.tagged,1);
+  assert.deepEqual(site.checked,['1:0','1:1']); assert.deepEqual([...site.labels],['1:1']);
+});
+
+test('reprise directe sur la dernière page visitée, malgré des ajouts sur une page précédente', async () => {
+  const site = new Site([[card('A')],[card('B'),card('C')],[card('D')]]), state = store();
+  await scanCollection(site,config,state,{...options,limit:2});
+  const saved = await state.get('progress'); delete saved.cursor; await state.put('progress',saved);
+  site.pages[0].unshift(card('Ajout'));
+  const result = await scanCollection(site,config,state,options);
+  assert.equal(result.complete,true); assert.equal(result.totals.checked,4);
+  assert.deepEqual(site.checked,['1:0','2:0','2:1','3:0']);
+});
+
+test('ajout en cours de page : relit les cartes à la position courante et garde le bon marché', async () => {
+  const site = new Site([[card('A'),card('B')]]), state = store();
+  const read = site.readMarket.bind(site);
+  site.readMarket = async c => {
+    const market = await read(c);
+    if (c.title==='A' && site.pages[0].length===2) site.pages[0].unshift(card('Ajout'));
+    return market;
+  };
+  const result = await scanCollection(site,config,state,options);
+  assert.equal(result.complete,true); assert.equal(result.totals.checked,3); assert.equal(result.totals.changes,1);
+  assert.deepEqual(site.checked,['1:0','1:1','1:2']);
+});
+
+test('suppression de pages avant reprise : position ramenée à la dernière page existante', async () => {
+  const site = new Site([[card('A')],[card('B')],[card('C'),card('D')]]), state = store();
+  await scanCollection(site,config,state,{...options,limit:3});
+  site.pages.pop(); site.pages[1]=[card('E')];
+  const result = await scanCollection(site,config,state,options);
+  assert.equal(result.complete,true); assert.equal(result.cursor.page,2); assert.ok(result.totals.changes>=1);
+});
+
+test('pagination modifiée pendant Suivant : recharge et continue ou termine si la dernière page a disparu', async () => {
+  for (const removed of [false,true]) {
+    const site = new Site([[card('A')],[card('B')]]), state = store();
+    site.nextPage = async () => {
+      if (removed) site.pages.pop();
+      throw new PauseError('pagination_blocked','Bouton Suivant indisponible');
+    };
+    const result = await scanCollection(site,config,state,options);
+    assert.equal(result.complete,true); assert.equal(result.totals.checked,removed?1:2);
+    assert.equal(result.totals.changes,1);
+  }
+});
+
+test('étiquette non confirmée : consigne une erreur, sans second clic, puis continue', async () => {
+  const site = new Site([[card('A'),card('B')]]), state = store();
+  site.ensureLabel = async () => { site.tagCalls++; throw new PauseError('label_unconfirmed','Étiquette absente après rechargement.'); };
+  const result = await scanCollection(site,{...config,apply:true},state,options);
+  assert.equal(result.complete,true); assert.equal(result.totals.errors,2); assert.equal(result.totals.tagged,0); assert.equal(site.tagCalls,2);
+});
+
+test('erreurs globales et échec de récupération : arrêt sans avancer ni avaler les erreurs', async () => {
+  for (const code of ['login_required','access_denied','rate_limited','human_verification_required','network_error','browser_closed','rarity_filter_invalid']) {
+    const site = new Site([[card(),card('B')]]), state = store();
+    site.readMarket = async () => { throw new PauseError(code,'Erreur globale'); };
+    await assert.rejects(scanCollection(site,{...config,apply:true},state,options),{code});
+    assert.equal((await state.get('progress')).pages[1].done,0); assert.equal(site.tagCalls,0);
+  }
+  const site = new Site([[card()]]), state = store();
+  site.readMarket = async () => { throw new PauseError('market_rarity_missing','SR absent'); };
+  site.recoverCard = async () => { throw new PauseError('login_required','Session expirée'); };
+  await assert.rejects(scanCollection(site,config,state,options),{code:'login_required'});
+  assert.equal((await state.get('progress')).pages[1].done,0);
+  assert.equal((await state.get('current')).code,'market_rarity_missing');
+});
+
+test('délai UI sur une carte : récupération puis passage à la suivante', async () => {
+  const site = new Site([[card('A'),card('B')]]), state = store();
+  const open = site.openCard.bind(site);
+  site.openCard = async (index,...args) => {
+    if(index===0) throw Object.assign(new Error('Bouton introuvable'),{name:'TimeoutError'});
+    return open(index,...args);
+  };
+  const result = await scanCollection(site,{...config,apply:true},state,options);
+  assert.equal(result.complete,true); assert.equal(result.totals.errors,1); assert.equal(result.totals.tagged,1);
+  assert.equal(state.events.find(e=>e.event==='collection_card_error').code,'ui_timeout');
+});
+
+test('rapport : cartes à revoir et changements du parcours courant, sans écraser les cartes déplacées', async () => {
+  const dir = await mkdtemp(path.join(process.env.TEST_TMPDIR || os.tmpdir(),'wiki-collection-report-'));
+  const { createState } = await import('../src/state.mjs');
+  const state = await createState(path.join(dir,'collection','simulation'));
+  await state.put('progress',{startedAt:'2026-02-01T00:00:00Z',totals:{errors:1,changes:1},approximate:true,complete:true});
+  const events = [
+    {at:'2026-01-01T00:00:00Z',event:'collection_card_error',title:'Ancien parcours'},
+    {event:'collection_card_error',title:'Corey Sevier',rarity:'SR',code:'market_rarity_missing',reason:'SR absente'},
+    {event:'collection_changed',page:2,message:'Page modifiée'},
+    {event:'collection_result',page:1,index:1,title:'A',rarity:'PC',eligible:true},
+    {event:'collection_result',page:1,index:1,title:'B',rarity:'PC',eligible:true},
+  ].map(event=>({at:'2026-02-02T00:00:00Z',...event}));
+  await appendFile(path.join(state.dir,'events.jsonl'),events.map(e=>JSON.stringify(e)).join('\n')+'\n');
+  const original = console.log, lines=[];
+  try {
+    console.log = line=>lines.push(line);
+    assert.equal(await runCollectionCommand('collection-report',[],{DATA_DIR:dir}),0);
+  } finally { console.log=original; }
+  const report=JSON.parse(lines[0]);
+  assert.equal(report.errors.length,1); assert.equal(report.errors[0].title,'Corey Sevier');
+  assert.equal(report.changes.length,1); assert.equal(report.candidates.length,2); assert.equal(report.approximate,true);
 });
 test('arrêt du processus vérifié avant ouverture', async () => {
   const site = new Site([[card()]]), state = store(), abort = new AbortController();

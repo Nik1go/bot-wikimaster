@@ -16,7 +16,8 @@ relit la sélection après chaque clic et désactive seulement les autres raret�
 encore sélectionnées, puis vérifie la sélection et l’en-tête des ventes
 avant de lire Ventes/Moyenne. Il gère l’onglet Marché observé le 14 novembre 2026
 et le bouton accessible « Vue du marché » pour l’ouverture de cette vue.
-Une rareté impossible à confirmer provoque une pause explicite.
+Une rareté impossible à confirmer fait ignorer la carte et consigner une erreur,
+puis le bot poursuit le parcours. Il n’utilise jamais le prix d’une autre rareté.
 
 Le marché observé utilise un filtre exclusif « Toutes / Rare / Super Rare… » :
 cliquer sur Rare désactive Toutes automatiquement. Le bot gère aussi une interface
@@ -32,6 +33,14 @@ apparu à l’écran ne suffit pas. La confirmation fonctionne aussi lorsque le 
 enregistre hors d’un chemin `/api/`. En cas d’échec, aucun second clic n’est envoyé.
 `collection_label_verified` confirme cette relecture ; le journal conserve seulement
 la méthode, l’adresse sans paramètres et le statut des requêtes, sans cookies ni contenu.
+
+Les erreurs propres à une carte (rareté absente, marché illisible, délai d’interface,
+étiquette non confirmée) sont consignées dans `collection_card_error`, puis le bot
+recharge la collection et poursuit à la position suivante. Les cartes à revoir sont
+listées dans `collection-report`, avec leur rareté, leur position et la cause.
+Aucune étiquette « erreur » n’est ajoutée au compte. Une écriture incertaine n’est
+pas répétée pendant ce passage. Une session expirée, un refus HTTP, une vérification
+humaine, une panne réseau ou une collection impossible à rétablir restent des pauses.
 
 ## Déployer sur ton VPS existant
 
@@ -121,8 +130,10 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml logs -f --tail=50
 Ctrl+C quitte l’affichage des logs ; le service reste actif. Il conserve la
 progression d’un passage précédent. Une fois le parcours terminé,
 il ferme le navigateur et reste en veille. Il ne recommence pas automatiquement.
-Évite de modifier la collection pendant le parcours : ouvertures, ventes et
-défausses peuvent changer l’ordre des cartes et imposer un nouveau parcours.
+Les ajouts, ventes et défausses ne bloquent plus le parcours si les cartes changent
+de position. Le bot continue à sa position courante : quelques cartes peuvent être
+manquées ou revues, et les nouvelles cartes insérées avant cette position peuvent
+attendre un prochain passage. Les changements détectés sont signalés dans les logs.
 À 3 secondes de pause, 10 000 cartes représentent déjà 8 h 20 de pauses,
 auxquelles s’ajoutent les chargements et l’étiquetage.
 
@@ -159,12 +170,15 @@ collection_page | Page 4/190 : 12/50 cartes déjà vérifiées.
 collection_card | Exemple [PC] : ouverture du marché.
 collection_result | Exemple [PC] : moyenne 63 WB, 120 ventes ; étiquette ajoutée (les deux seuils sont dépassés).
 collection_heartbeat | En cours : page 4, carte 14, Exemple [R], étape market.
+collection_recovering | Corey Sevier [SR] : Le marché ne propose pas la rareté SR. Rechargement de la collection pour continuer.
+collection_card_error | Corey Sevier [SR] : carte à revoir (market_rarity_missing) — Le marché ne propose pas la rareté SR. Passage à la suivante, aucun nouveau clic d’étiquetage.
+collection_changed | La page 4 a changé ; reprise à la carte 15. Poursuite à la position courante ; certaines cartes peuvent être manquées ou revues.
 collection_paused | Lecture refusé : HTTP 429, /api/... Intervention nécessaire avant reprise.
-collection_complete | Toutes les cartes C, PC et R ont été vérifiées.
+collection_complete | Parcours C,PC,R terminé : 10000 cartes traitées, 12 erreurs à revoir, 3 changements de collection.
 ```
 
 Un message de suivi apparaît toutes les 30 secondes pendant le parcours. Les
-étapes sont `opening`, `market`, `label` et `simulation`. Les raisons de rejet
+étapes sont `opening`, `market`, `label`, `simulation` et `recovery`. Les raisons de rejet
 sont `no_sales`, `average_too_low` et `not_enough_sales`. Les actions sont
 `skipped`, `would_tag`, `tagged` et `already_tagged`.
 
@@ -194,6 +208,11 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml cp wiki-collectio
 
 Les logs affichent des heures UTC. `collection-report` affiche les candidates
 du parcours courant, avec leur prix, leur rareté, leur position et leur action.
+Il contient aussi `errors` (cartes à revoir) et `changes` (changements détectés).
+Les compteurs `totals.errors` et `totals.changes` sont visibles dans l’état.
+`totals.checked` compte les cartes traitées, y compris celles écartées pour erreur.
+`approximate: true` signale un changement détecté pouvant entraîner des cartes
+manquées ou revues. Les positions du rapport sont celles observées au moment du traitement.
 Une moyenne manquante n’est jamais remplacée par zéro ou une autre rareté.
 
 La ligne `collection_market_rarity` confirme la rareté isolée. En cas d’échec,
@@ -210,8 +229,8 @@ Après Ctrl+C ou un arrêt normal, relance le même parcours : la progression es
 conservée après chaque carte. Si l’arrêt survient pendant l’ajout d’étiquette,
 la carte est revérifiée ; une étiquette déjà présente n’est pas basculée.
 
-En cas de session expirée, d’erreur réseau, de refus HTTP ou de changement
-d’interface : le bot enregistre une pause persistante. Arrête le service, corrige
+En cas de session expirée, d’erreur réseau, de refus HTTP ou d’interface empêchant
+de rétablir la collection : le bot enregistre une pause persistante. Arrête le service, corrige
 la connexion dans `collection-login`, puis arrête ce mode avec Ctrl+C :
 
 ```bash
@@ -261,10 +280,15 @@ La connexion et la progression restent conservées ; `--fresh` n’est pas néce
 pour réparer uniquement le démarrage.
 
 L’interface n’expose pas d’identifiant unique d’exemplaire dans les cartes du
-tableau. La reprise s’appuie donc sur l’ordre, les titres, les raretés et les
-statistiques ATK/DEF de chaque page, pas seulement sur le nom. Les pages déjà
-traitées sont revérifiées en avançant. Si une page a changé (`collection_changed`),
-ou si tu modifies les seuils (`scan_policy_changed`), recommence explicitement :
+tableau. Le bot reprend directement à la dernière page visitée, à la position
+sauvegardée, y compris avec les anciennes progressions. Les pages précédentes ne
+sont pas revérifiées. Si la page courante a changé (`collection_changed`), le bot
+actualise son relevé des titres, raretés et statistiques ATK/DEF puis poursuit
+sans remettre les compteurs à zéro. Si des pages ont disparu, il revient à la
+dernière page existante. La carte ouverte et le marché restent contrôlés avant l’étiquetage.
+
+`--fresh` est utile pour refaire volontairement un passage, notamment après un
+changement de seuils ou de raretés (`scan_policy_changed`) :
 
 ```bash
 sudo docker compose -f compose.yaml -f compose.collection.yaml stop wiki-collection
@@ -275,7 +299,8 @@ sudo docker compose -f compose.yaml -f compose.collection.yaml logs -f --tail=50
 
 `--fresh` remet les compteurs du parcours à zéro. Les étiquettes et la connexion
 restent présentes. Le bot ne peut pas distinguer deux exemplaires strictement
-identiques qui auraient été intervertis : conserve la collection stable pendant un passage.
+identiques qui auraient été intervertis. Une collection stable améliore la couverture,
+mais les changements de cartes ne constituent plus une raison d’arrêt.
 
 Ne lance qu’un seul navigateur sur ce profil : arrête les bots de marché,
 d’ouverture et les modes manuels avant le bot collection. Un profil occupé
@@ -339,6 +364,11 @@ Sergio Gómez à 12 WB / 25 ventes, une absence de vente, un en-tête de rareté
 contradictoire et un refus HTTP 429. Il vérifie un enregistrement via `/collection`,
 via `/api/mock-label` et sur un deuxième serveur local, la relecture d’une SR sur une page ultérieure, la
 commande complète en étiquetage et le refus d’un badge optimiste non enregistré.
+Corey Sevier [SR] sans marché SR est ignorée, puis Broad Peak [SR] est étiquetée
+sur la même page. Un badge non enregistré est signalé sans bloquer les autres
+cartes ni répéter le clic. Un ajout entre deux exécutions permet de reprendre
+directement page 2 sans `--fresh`. Les tests vérifient aussi les suppressions de
+pages, les ajouts en cours de page et la conservation des erreurs dans le rapport.
 Aucun accès au compte n’est nécessaire.
 
 Vérifications sur le vrai site le 14 novembre 2026 : connexion Edge déjà active,

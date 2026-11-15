@@ -141,7 +141,7 @@ export class CollectionSite {
   }
   async openCard(index, card, signature) {
     const current = await this.readPage();
-    if (pageSignature(current.cards) !== signature) throw new PauseError('collection_changed', 'L’ordre des cartes a changé pendant le parcours. Repartir avec --fresh.');
+    if (pageSignature(current.cards) !== signature) throw new PauseError('collection_changed', 'L’ordre des cartes a changé pendant l’ouverture ; carte écartée pour ce passage.');
     this.active = { index, card, signature, pageNumber: current.number };
     await this.page.locator(CARD_SELECTOR).nth(index).getByRole('heading', { level: 3 }).click();
     await this.until(async () => await this.modal().isVisible(), 'card_open_timeout', 'Le détail de la carte ne s’ouvre pas.');
@@ -210,7 +210,7 @@ export class CollectionSite {
       for (const e of elements) if (['Ventes','Moyenne'].includes(e.textContent.trim())) result[e.textContent.trim()] = e.parentElement.querySelector('p:nth-of-type(2)')?.textContent.trim();
       return result;
     });
-    await this.healthy();
+    await this.assertCard(card);
     if (stats.Ventes == null && /aucune vente pour l'instant/i.test(await modal.innerText())) return { rarity: card.rarity, sales: 0, average: null };
     if (stats.Ventes == null || stats.Moyenne == null) throw new PauseError('market_stats_invalid', 'Compteurs Ventes/Moyenne introuvables ; carte non étiquetée.');
     return { rarity: card.rarity, sales: frenchNumber(stats.Ventes), average: frenchNumber(stats.Moyenne) };
@@ -231,6 +231,7 @@ export class CollectionSite {
     const active = this.active;
     const operation = { requests: new Map(), lastActivity: Date.now(), failure: null };
     const summary = () => [...operation.requests.values()].map(({method,endpoint,status,pending}) => ({method,endpoint,status,pending}));
+    await this.assertCard(card);
     this.labelOperation = operation;
     try {
       if (await existing.isVisible()) await existing.click();
@@ -263,6 +264,12 @@ export class CollectionSite {
   async closeCard() {
     await this.modal().getByRole('button', { name: 'Fermer', exact: true }).click();
     await this.modal().waitFor({ state: 'hidden' });
+  }
+  async recoverCard(pageNumber) {
+    await this.healthy();
+    await this.prepare();
+    const current = await this.readPage();
+    await this.goToPage(Math.min(pageNumber, current.totalPages));
   }
   async nextPage(expected) {
     await this.healthy();
