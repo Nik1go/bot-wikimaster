@@ -30,6 +30,7 @@ jobs:
       - run: bash -n docker/entrypoint.sh
       - run: docker compose config --quiet
       - run: docker compose -f compose.yaml -f compose.collection.yaml config --quiet
+      - run: docker compose -f compose.yaml -f compose.relabel.yaml config --quiet
       - run: node scripts/check-compose.mjs
       - run: docker compose build
       - name: Collection lock lifecycle without an account
@@ -39,4 +40,6 @@ jobs:
       - run: docker compose run --rm wiki-bot smoke
       - name: Collection browser check on a local fixture
         run: docker compose run --rm --entrypoint node wiki-bot scripts/collection-browser-check.mjs
+      - name: Daily relabelling browser check on a local fixture
+        run: docker compose run --rm --entrypoint node wiki-bot scripts/relabel-browser-check.mjs
       - run: docker compose run --rm wiki-bot manual-smoke

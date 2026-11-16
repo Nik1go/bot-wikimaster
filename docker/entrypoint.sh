@@ -7,7 +7,7 @@ umask 077
 # Never remove collection.guard: unlinking it would create a second lock inode.
 unset COLLECTION_FLOCK_HELD
 case "${1:-run}" in
-  collection-run|collection-scan|collection-login|collection-resume|collection-unlock)
+  collection-run|collection-scan|collection-login|collection-resume|collection-unlock|relabel-once|relabel-resume)
     mkdir -p "${DATA_DIR:-/data}"
     exec 9>"${DATA_DIR:-/data}/collection.guard"
     if ! flock -n 9; then
@@ -29,7 +29,7 @@ fi
 
 # Control commands need neither the desktop nor another browser instance.
 case "${1:-run}" in
-  collection-status|collection-report|collection-resume|collection-unlock)
+  collection-status|collection-report|collection-resume|collection-unlock|relabel-status|relabel-report|relabel-resume)
     exec node /app/src/index.mjs "$@" ;;
 esac
 if [[ "${1:-run}" == "resume" || "${1:-run}" == "status" || "${1:-run}" == "use-manual-session" || "${1:-run}" == "market-demo" || "${1:-run}" == "market-compare" || "${1:-run}" == "market-status" || "${1:-run}" == "market-report" || "${1:-run}" == "market-resume" || "${1:-run}" == "market-unlock" ]]; then

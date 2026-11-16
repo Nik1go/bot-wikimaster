@@ -7,6 +7,16 @@ import { WikiMastersSite } from './site.mjs';
 
 process.umask(0o077);
 const mode = process.argv[2] || 'run';
+if (mode.startsWith('relabel-')) {
+  try {
+    const { runRelabelCommand } = await import('./relabel-cli.mjs');
+    process.exitCode = await runRelabelCommand(mode, process.argv.slice(3));
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'relabel_error', code: error.code || 'configuration_error', message: error.message }));
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
 if (mode.startsWith('collection-')) {
   try {
     const { runCollectionCommand, COLLECTION_COMMANDS } = await import('./collection-cli.mjs');

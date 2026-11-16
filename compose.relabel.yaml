@@ -1,0 +1,10 @@
+services:
+  wiki-relabel:
+    extends:
+      file: compose.yaml
+      service: wiki-bot
+    profiles: [relabel]
+    command: [relabel-run]
+    environment:
+      DATA_DIR: /data
+      RELABEL_APPLY: "${RELABEL_APPLY:-false}"

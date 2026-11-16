@@ -1,5 +1,10 @@
 # WikiMasters — marché en simulation, paquets en veille
 
+**Restauration quotidienne des étiquettes des invendues.** Le nouveau service
+lit l’historique des ventes, retrouve les cartes « Non vendue » encore
+« Possédée » et remet `à vendre` si nécessaire. Liste sauvegardée, doublons,
+simulation et reprise après erreur : voir [RELABEL.md](RELABEL.md).
+
 **Nouveau : tri des cartes C / PC / R.** Un bot distinct parcourt la collection,
 isole la rareté du marché et ajoute « à vendre » si la moyenne est **> 50 WB**
 et le compteur de ventes **> 80**. Reprise, simulation et diagnostic inclus.

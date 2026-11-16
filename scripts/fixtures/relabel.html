@@ -1,0 +1,29 @@
+<!doctype html><html><body><main id="main"></main><div id="detail"></div><script>
+const inventory=__INVENTORY__,history=__HISTORY__,names=__NAMES__,saved=new Set(__LABELS__);
+const broken=__BROKEN__; let page=1,shown=3,active=null,query='',filterActive=true,rarityActive=true;
+const esc=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
+const art=c=>'<img src="/rarity/rare.webp"><div>'+c.rarity+'</div><div><h3>'+esc(c.title)+'</h3><span class="font-bold">'+c.stats[0]+'</span><span class="font-bold">'+c.stats[1]+'</span></div>';
+function market(){document.getElementById('main').innerHTML='<h1>Marché</h1><button onclick="renderHistory()">Historique ('+history.length+')</button>';}
+function renderHistory(){
+  document.getElementById('main').innerHTML='<h1>Marché</h1><button onclick="renderHistory()">Historique ('+history.length+')</button>'+history.slice(0,broken?2:shown).map((c,i)=>'<a class="card-frame" href="/marketplace/id-'+i+'"><div>'+art(c)+(c.owned?'<span title="Dans ta collection">Possédée</span>':'')+'</div><span>'+(c.status==='unsold'?'Non vendue':'Vendue pour')+'</span></a>').join('')+(!broken&&shown<history.length?'<button onclick="shown+=3;renderHistory()">Charger la suite</button>':'');
+}
+function collection(){
+  document.getElementById('main').innerHTML='<h1>Collection</h1><input id="search" placeholder="Rechercher par titre ou catégorie..." oninput="query=this.value;page=1;renderGrid()"><button id="filter" aria-label="Filtrer par étiquette" onclick="document.getElementById(\'options\').hidden=false">'+(filterActive?'Autre étiquette':'Toutes les étiquettes')+'</button><div id="options" hidden><button role="option" onclick="filterActive=false;document.getElementById(\'filter\').textContent=this.textContent;this.parentElement.hidden=true">Toutes les étiquettes</button></div><div id="rarity"></div><div id="grid"></div><div id="pager"></div>';
+  renderGrid();
+}
+function renderGrid(){
+  document.getElementById('rarity').innerHTML='<button class="'+(rarityActive?'ring-2':'')+'">C</button>'+(rarityActive?'<button onclick="rarityActive=false;renderGrid()">Réinitialiser rareté</button>':'');
+  const visible=inventory.map((card,id)=>({card,id})).filter(({card})=>card.title.toLowerCase().includes(query.toLowerCase()));
+  const total=Math.max(1,visible.length);
+  document.getElementById('grid').innerHTML=visible.slice(page-1,page).map(({card,id})=>'<div class="cursor-pointer" onclick="openCard('+id+')">'+art(card)+'</div>').join('')||(visible.length?'':'Aucune carte');
+  document.getElementById('pager').innerHTML=total>1?'<button onclick="jumpForm()">Page '+page+' / '+total+'</button><button '+(page===total?'disabled':'')+' onclick="page++;renderGrid()">Suivant →</button>':'';
+}
+function jumpForm(){document.getElementById('pager').innerHTML='<input type="number" aria-label="Aller à la page" onkeydown="if(event.key===\'Enter\'){page=Number(this.value);renderGrid()}">';}
+function openCard(id){active=id;renderModal();}
+function renderModal(){
+  const c=inventory[active];
+  document.getElementById('detail').innerHTML='<div class="card-frame"><button aria-label="Fermer" onclick="document.getElementById(\'detail\').innerHTML=\'\'">Fermer</button><div><h2>'+esc(c.title)+'</h2><span>'+names[c.rarity]+'</span></div><span class="font-bold">'+c.stats[0]+'</span><span class="font-bold">'+c.stats[1]+'</span><div role="tablist"><button role="tab">Détails</button></div>'+(saved.has(active)?'<button aria-label="Retirer l\'étiquette à vendre">à vendre</button>':'')+'<input role="combobox" oninput="document.querySelector(\'[role=listbox]\').hidden=false"><div role="listbox" hidden><button onclick="tag()">à vendre</button></div></div>';
+}
+async function tag(){const id=active;saved.add(id);renderModal();await fetch('/collection',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id})});}
+if(location.pathname==='/collection')collection();else if(location.pathname==='/login')document.getElementById('main').innerHTML='<h1>Connexion</h1>';else market();
+</script></body></html>
